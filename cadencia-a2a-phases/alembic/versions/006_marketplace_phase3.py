@@ -1,7 +1,7 @@
 """Phase 3 Marketplace — add industry_vertical to capability_profiles.
 
 Revision ID: 006
-Revises: 005_agent_memory
+Revises: 005
 Create Date: 2026-04-06
 
 This migration adds the `industry_vertical` column to the `capability_profiles`
@@ -19,7 +19,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "006"
-down_revision: Union[str, None] = "005_agent_memory"
+down_revision: Union[str, None] = "005"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

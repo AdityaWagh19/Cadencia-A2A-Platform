@@ -70,7 +70,7 @@ CMD ["python", "-m", "uvicorn", "main:app", \
 FROM production AS migration
 # Run as one-off ECS task before main deployment
 USER cadencia
-CMD ["python", "-m", "alembic", "upgrade", "head"]
+CMD ["alembic", "upgrade", "head"]
 
 # ── TEST stage ────────────────────────────────────────────────
 FROM base AS test

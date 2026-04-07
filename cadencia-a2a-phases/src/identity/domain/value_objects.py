@@ -143,6 +143,11 @@ class HashedPassword(BaseValueObject):
 
     value: str  # bcrypt hash string
 
+    @staticmethod
+    def _truncate(plaintext: str) -> str:
+        """Bcrypt only uses the first 72 bytes. Truncate to avoid bcrypt>=4.1 errors."""
+        return plaintext.encode("utf-8")[:72].decode("utf-8", errors="ignore")
+
     @classmethod
     def from_plaintext(cls, plaintext: str) -> "HashedPassword":
         """Hash plaintext with bcrypt. Returns a HashedPassword value object."""
@@ -150,14 +155,14 @@ class HashedPassword(BaseValueObject):
         from passlib.context import CryptContext  # type: ignore[import-untyped]
 
         _ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-        return cls(value=_ctx.hash(plaintext))
+        return cls(value=_ctx.hash(cls._truncate(plaintext)))
 
     def verify(self, plaintext: str) -> bool:
         """Return True if plaintext matches the stored hash."""
         from passlib.context import CryptContext  # type: ignore[import-untyped]
 
         _ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-        return bool(_ctx.verify(plaintext, self.value))
+        return bool(_ctx.verify(self._truncate(plaintext), self.value))
 
 
 # ── HashedAPIKey ──────────────────────────────────────────────────────────────

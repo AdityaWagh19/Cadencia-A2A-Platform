@@ -37,7 +37,7 @@ def _get_algorithm() -> str:
 def _get_signing_key() -> str:
     private_key = os.environ.get("JWT_PRIVATE_KEY", "")
     if private_key:
-        return private_key
+        return private_key.replace("\\n", "\n")
     secret = os.environ.get("JWT_SECRET_KEY", "dev-insecure-secret-change-me")
     return secret
 
@@ -45,7 +45,7 @@ def _get_signing_key() -> str:
 def _get_verifying_key() -> str:
     public_key = os.environ.get("JWT_PUBLIC_KEY", "")
     if public_key:
-        return public_key
+        return public_key.replace("\\n", "\n")
     return os.environ.get("JWT_SECRET_KEY", "dev-insecure-secret-change-me")
 
 
