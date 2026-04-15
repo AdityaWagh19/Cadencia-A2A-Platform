@@ -14,7 +14,7 @@
 
 **Upload one RFQ. Cadencia autonomously handles seller discovery, AI negotiation, blockchain escrow, settlement, and regulatory compliance — end to end.**
 
-[Features](#-features) · [Architecture](#-system-architecture) · [Quick Start](#-quick-start) · [API Reference](#-api-reference) · [Deployment](#-deployment)
+[Features](#features) · [Architecture](#system-architecture) · [Quick Start](#quick-start) · [API Reference](#api-reference) · [Deployment](#deployment)
 
 </div>
 
@@ -55,18 +55,13 @@ Cadencia is a **closed-loop, AI-native agentic B2B marketplace** purpose-built f
 
 ### The Solution
 
-```
-Buyer uploads RFQ
-      ↓
-  LLM parses fields (product, HSN, budget, window)
-      ↓
-  pgvector finds Top-N matching sellers (< 2 seconds)
-      ↓
-  AI agents negotiate autonomously (buyer + seller LLM agents)
-      ↓
-  Algorand escrow deployed on-chain (smart contract)
-      ↓
-  Delivery confirmed → escrow released → FEMA + GST records auto-generated
+```mermaid
+flowchart TD
+    A[Buyer uploads RFQ] --> B[LLM parses fields: product, HSN, budget, window]
+    B --> C[pgvector finds Top-N matching sellers in < 2 seconds]
+    C --> D[AI agents negotiate autonomously: buyer + seller LLM agents]
+    D --> E[Algorand escrow deployed on-chain via smart contract]
+    E --> F[Delivery confirmed → escrow released → FEMA + GST records auto-generated]
 ```
 
 ---
@@ -91,130 +86,151 @@ Buyer uploads RFQ
 
 ### Seven-Layer Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         Layer 1 — Marketplace & Onboarding              │
-│   RFQ Upload → LLM NLP Parsing → pgvector Similarity Search → Top-N    │
-├─────────────────────────────────────────────────────────────────────────┤
-│                     Layer 2 — Agent Personalization Engine              │
-│   AgentProfile · Strategy Weights · History Embeddings · Playbooks     │
-├─────────────────────────────────────────────────────────────────────────┤
-│                           Layer 3 — API Gateway                        │
-│   FastAPI · JWT Validation · Rate Limiting · CORS · SSE Stream         │
-├─────────────────────────────────────────────────────────────────────────┤
-│                          Layer 4 — Core Services                       │
-│   NeutralEngine (Negotiation) · SettlementService · ComplianceGen      │
-├─────────────────────────────────────────────────────────────────────────┤
-│                       Layer 5 — Algorand Interaction                   │
-│   Puya Contract Client · algosdk · Dry-Run Safety · Merkle Anchoring   │
-├─────────────────────────────────────────────────────────────────────────┤
-│                          Layer 6 — Data Layer                          │
-│   PostgreSQL 16 + pgvector · Async SQLAlchemy · Unit of Work · Redis 7 │
-├─────────────────────────────────────────────────────────────────────────┤
-│                      Layer 7 — External Integrations                   │
-│   Frankfurter FX Feed · INR↔USDC On/Off-Ramp · KYC Provider (mocked)  │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph Layer 1: Marketplace & Onboarding
+        1A[RFQ Upload] --> 1B[LLM NLP Parsing]
+        1B --> 1C[pgvector Similarity Search]
+        1C --> 1D[Top-N Seller Ranking]
+    end
+
+    subgraph Layer 2: Agent Personalization Engine
+        2A[AgentProfile] -.- 2B[Strategy Weights]
+        2A -.- 2C[History Embeddings]
+        2A -.- 2D[Playbooks]
+    end
+
+    subgraph Layer 3: API Gateway
+        3A[FastAPI] -.- 3B[JWT Validation]
+        3A -.- 3C[Rate Limiting & CORS]
+        3A -.- 3D[SSE Stream]
+    end
+
+    subgraph Layer 4: Core Services
+        4A[NeutralEngine: Negotiation] -.- 4B[SettlementService]
+        4A -.- 4C[ComplianceGenerator]
+    end
+
+    subgraph Layer 5: Algorand Interaction
+        5A[Puya Contract Client] -.- 5B[algosdk]
+        5A -.- 5C[Dry-Run Safety & Merkle Anchoring]
+    end
+
+    subgraph Layer 6: Data Layer
+        6A[PostgreSQL 16 + pgvector] -.- 6B[Async SQLAlchemy & UoW]
+        6A -.- 6C[Redis 7]
+    end
+
+    subgraph Layer 7: External Integrations
+        7A[Frankfurter FX Feed] -.- 7B[INR/USDC On/Off-Ramp]
+        7A -.- 7C[KYC Provider]
+    end
 ```
 
 ### Hexagonal Architecture (Ports & Adapters)
 
-```
-                        ┌─────────────────────┐
-                        │    API / FastAPI     │  ← HTTP adapters
-                        └──────────┬──────────┘
-                                   │
-              ┌────────────────────▼─────────────────────┐
-              │           Application Layer               │
-              │   Commands · Queries · Use Cases          │
-              └──────┬──────────────────────┬────────────┘
-                     │                      │
-        ┌────────────▼────────┐   ┌─────────▼───────────┐
-        │    Domain Layer     │   │   Domain Events      │
-        │  Entities · Aggs   │   │  Publisher·Handlers  │
-        │  Value Objects      │   └─────────────────────┘
-        │  Domain Rules       │
-        └────────────┬────────┘
-                     │
-        ┌────────────▼────────────────────────────────────┐
-        │              Infrastructure Layer               │
-        │  PostgreSQL · Redis · Algorand · LLM · S3       │
-        └─────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    HTTP["API / FastAPI (HTTP Adapters)"] --> App
+    
+    subgraph App["Application Layer"]
+        CQ["Commands, Queries, Use Cases"]
+    end
+    
+    App --> Domain
+    App --> DE["Domain Events (Publisher/Handlers)"]
+    
+    subgraph Domain["Domain Layer (Core)"]
+        Ent["Entities & Aggregates"] -.- VO["Value Objects"]
+        VO -.- Rules["Domain Rules"]
+    end
+    
+    Domain --> Infra
+    
+    subgraph Infra["Infrastructure Layer"]
+        DB["PostgreSQL / Redis / Algorand / LLM / S3"]
+    end
 ```
 
 ### Bounded Contexts (Domain-Driven Design)
 
-```
-┌─────────────┐   ┌──────────────┐   ┌──────────────────┐
-│  identity   │   │ marketplace  │   │   negotiation    │
-│             │   │              │   │                  │
-│ Enterprise  │   │ RFQ Upload   │   │ LLM Agents       │
-│ Users       │──▶│ NLP Parsing  │──▶│ NeutralEngine    │
-│ KYC         │   │ pgvector     │   │ SSE Stream       │
-│ JWT Auth    │   │ Matching     │   │ Human Override   │
-│ API Keys    │   │              │   │                  │
-└─────────────┘   └──────────────┘   └────────┬─────────┘
-                                               │ SessionAgreed
-                                               ▼
-┌─────────────┐   ┌──────────────┐   ┌──────────────────┐
-│  treasury   │   │  compliance  │   │   settlement     │
-│             │   │              │   │                  │
-│ INR/USDC    │   │ Audit Log    │◀──│ CadenciaEscrow   │
-│ FX Feed     │   │ FEMA Records │   │ Algorand SDK     │
-│ Liquidity   │   │ GST Records  │   │ Dry-Run Safety   │
-│ Forecast    │   │ PDF/CSV      │   │ Merkle Service   │
-└─────────────┘   └──────────────┘   └──────────────────┘
+```mermaid
+flowchart LR
+    subgraph Identity
+        I1[Enterprise, Users, KYC] -.- I2[JWT Auth, API Keys]
+    end
+    
+    subgraph Marketplace
+        M1[RFQ Upload, NLP Parsing] -.- M2[pgvector Matching]
+    end
+    
+    subgraph Negotiation
+        N1[LLM Agents, NeutralEngine] -.- N2[SSE Stream, Human Override]
+    end
+    
+    subgraph Settlement
+        S1[CadenciaEscrow, Algorand SDK] -.- S2[Dry-Run Safety, Merkle]
+    end
+    
+    subgraph Compliance
+        C1[Audit Log] -.- C2[FEMA & GST Records]
+    end
+    
+    subgraph Treasury
+        T1[INR/USDC, FX Feed] -.- T2[Liquidity Forecast]
+    end
+    
+    Identity --> Marketplace
+    Marketplace --"RFQConfirmed"--> Negotiation
+    Negotiation --"SessionAgreed"--> Settlement
+    Settlement --"EscrowReleased"--> Compliance
+    Treasury -.-> Settlement
 ```
 
 ---
 
 ## Trade Flow — End to End
 
-```
-BUYER                    CADENCIA BACKEND                   SELLER
-  │                            │                              │
-  │── POST /v1/marketplace/rfq ▶│                              │
-  │   "500 MT HR Coil, ₹45–50K/MT, Mumbai, April 30"         │
-  │                            │                              │
-  │                     LLM NLP Parse                        │
-  │                     pgvector Match                       │
-  │                            │                              │
-  │◀── matches: [IndiaSteel(0.94), MetalCorp(0.89), ...] ────│
-  │                            │                              │
-  │── POST /v1/marketplace/rfq/{id}/confirm ▶                │
-  │                            │                              │
-  │                     RFQConfirmed event                   │
-  │                     NegotiationSession created           │
-  │                            │                              │
-  │                    ┌───────▼────────┐                    │
-  │                    │ BUYER LLM AGENT │                   │
-  │                    │ Round 1: ₹46,000│                   │
-  │                    └───────┬────────┘                    │
-  │                            │                    ┌────────▼────────┐
-  │                            │                    │SELLER LLM AGENT │
-  │                            │                    │Round 2: ₹49,000 │
-  │                            │                    └────────┬────────┘
-  │                            │  ...rounds 3–N...           │
-  │                            │  gap ≤ 2% → AGREED          │
-  │                            │                              │
-  │◀── SSE: {event:"agreed", final_price: 47800} ────────────│
-  │                            │                              │
-  │                    SessionAgreed event                   │
-  │                    Deploy CadenciaEscrow (Algorand)      │
-  │                            │                              │
-  │── POST /v1/escrow/{id}/fund ▶                            │
-  │   atomic PaymentTxn + AppCall                            │
-  │                            │                              │
-  │          [Delivery occurs off-platform]                  │
-  │                            │                              │
-  │── POST /v1/escrow/{id}/release ▶                         │
-  │   (Admin confirms delivery)                              │
-  │                            │                              │
-  │                    Merkle root anchored on-chain         │
-  │                    EscrowReleased event                  │
-  │                    FEMA + GST records generated          │
-  │                            │                              │
-  │◀── PDF: FEMA Form A2 ──────│──────────────────────────── │◀── ALGO payment
-  │◀── CSV: GST Record ────────│                              │
+```mermaid
+sequenceDiagram
+    participant B as Buyer
+    participant API as Cadencia API (FastAPI)
+    participant DB as Postgres/pgvector
+    participant LLM as AI Agents (LLMs)
+    participant ALGO as Algorand Blockchain
+    participant S as Seller
+
+    B->>API: POST /v1/marketplace/rfq (Text)
+    API->>LLM: NLP Field Extraction
+    API->>DB: Cosine Similarity Search
+    DB-->>API: Match List
+    API-->>B: Return Top matches (Scores)
+    
+    B->>API: POST /v1/rfq/{id}/confirm
+    Note over API: RFQConfirmed event
+    
+    loop Negotiation Rounds
+        LLM-->>B: SSE: Round N offer (Buyer AI)
+        LLM-->>S: SSE: Round N offer (Seller AI)
+        Note over LLM: Detect price gap <= 2%
+    end
+    
+    LLM-->>API: Convergence Detected
+    API-->>B: SSE: {event: "agreed"}
+    API-->>S: SSE: {event: "agreed"}
+    
+    Note over API: SessionAgreed event
+    API->>ALGO: Deploy CadenciaEscrow (Dry-run -> Broadcast)
+    B->>API: POST /v1/escrow/{id}/fund
+    
+    Note right of B: Independent Delivery (off-platform)
+    
+    API->>ALGO: Release escrow (Admin)
+    ALGO-->>S: ALGO payment transferred
+    
+    Note over API: Merkle root anchored on-chain<br>EscrowReleased event
+    API-->>B: Auto-generate FEMA & GST records
+    API-->>S: Auto-generate FEMA & GST records
 ```
 
 ---
@@ -223,18 +239,15 @@ BUYER                    CADENCIA BACKEND                   SELLER
 
 Events are the **only** way bounded contexts communicate. Direct cross-domain imports are prohibited and enforced by Ruff linting (TID252).
 
-```
-marketplace ──RFQConfirmed──▶ negotiation ──────────────────────────────┐
-                                   │                                    │
-                                   │ SessionAgreed                      │
-                                   ▼                                    │
-                             settlement                                  │
-                             │  │  │                                    │
-                  EscrowDeployed │  EscrowReleased                       │
-                             │  │         │                             │
-                             ▼  ▼         ▼                             │
-                           compliance ◀───────────────────────────────── │
-                                                                 HumanOverride
+```mermaid
+flowchart LR
+    Marketplace --"RFQConfirmed"--> Negotiation
+    Negotiation --"SessionAgreed"--> Settlement
+    Settlement --"EscrowDeployed"--> Compliance
+    Settlement --"EscrowFunded"--> Compliance
+    Settlement --"EscrowReleased"--> Compliance
+    Settlement --"EscrowRefunded"--> Compliance
+    Negotiation --"HumanOverride"--> Negotiation
 ```
 
 | Event | Publisher | Subscriber | Effect |
@@ -253,18 +266,21 @@ marketplace ──RFQConfirmed──▶ negotiation ─────────�
 
 ### Entity-Relationship Overview
 
-```
-enterprises ──┬── users
-               ├── api_keys
-               ├── rfqs ──── matches ──── negotiation_sessions ──── offers
-               │                              │                      │
-               ├── capability_profiles         │                      │
-               ├── agent_profiles              │                      │
-               ├── audit_log                   │                      │
-               └── compliance_records          │                      │
-                                               └── escrow_contracts ──┘
-                                                         │
-                                                   settlements
+```mermaid
+erDiagram
+    ENTERPRISES ||--o{ USERS : "contains"
+    ENTERPRISES ||--o{ API_KEYS : "owns"
+    ENTERPRISES ||--o{ RFQS : "submits"
+    ENTERPRISES ||--|| CAPABILITY_PROFILES : "has"
+    ENTERPRISES ||--|| AGENT_PROFILES : "configures"
+    ENTERPRISES ||--o{ AUDIT_LOG : "has"
+    ENTERPRISES ||--o{ COMPLIANCE_RECORDS : "receives"
+    
+    RFQS ||--o{ MATCHES : "generates"
+    MATCHES ||--|| NEGOTIATION_SESSIONS : "becomes"
+    NEGOTIATION_SESSIONS ||--o{ OFFERS : "contains"
+    NEGOTIATION_SESSIONS ||--|| ESCROW_CONTRACTS : "triggers"
+    ESCROW_CONTRACTS ||--o{ SETTLEMENTS : "processes"
 ```
 
 ### Key Tables
@@ -301,20 +317,22 @@ CREATE INDEX ON rfqs
 
 ### State Machine
 
-```
-  ┌───────────────────────────────────────────────────────────┐
-  │                   CadenciaEscrow                          │
-  │                                                           │
-  │   initialize()          fund()           release()        │
-  │   ───────────▶  DEPLOYED ─────▶ FUNDED ──────────▶ RELEASED│
-  │                  (0)             (1)          └───▶ REFUNDED│
-  │                                                   refund() │
-  │                                                           │
-  │   freeze() ───▶ [FROZEN flag] ◀─── any party             │
-  │   unfreeze() ──▶ [normal]     ◀─── creator only          │
-  │                                                           │
-  │   Safety: dry-run REQUIRED before every call              │
-  └───────────────────────────────────────────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> DEPLOYED : initialize()
+    DEPLOYED --> FUNDED : fund()
+    FUNDED --> RELEASED : release()
+    FUNDED --> REFUNDED : refund()
+    
+    state FROZEN_MODE {
+        Normal --> Frozen : freeze()
+        Frozen --> Normal : unfreeze()
+    }
+    
+    note right of FROZEN_MODE
+        Safety: dry-run REQUIRED before every ALGO tx
+        FROZEN flag halts transfers in DEPLOYED and FUNDED
+    end note
 ```
 
 ### ABI Methods
@@ -647,11 +665,14 @@ docker pull ghcr.io/adityawagh19/cadencia-a2a-platform/frontend:latest
 
 ### Test Pyramid
 
-```
-          ▲  E2E Tests (Algorand localnet + real DB)      3 files
-         ▲▲▲  Integration Tests (Docker: DB + Redis)      6 files
-        ▲▲▲▲▲  Performance Tests (load & stress)          3 files
-      ▲▲▲▲▲▲▲▲▲  Unit Tests (Pure Python, zero I/O)      22 files
+```mermaid
+flowchart BT
+    T1["Unit Tests (Pure Python, zero I/O) - 22 files"]
+    T2["Performance Tests (Load/Stress) - 3 files"]
+    T3["Integration Tests (Docker DB/Redis) - 6 files"]
+    T4["E2E Tests (Algorand localnet + real DB) - 3 files"]
+    
+    T1 --> T2 --> T3 --> T4
 ```
 
 ### Running Tests
