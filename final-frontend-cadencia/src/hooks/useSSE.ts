@@ -14,6 +14,7 @@ export function useSSE({ sessionId, onEvent, enabled = true }: UseSSEProps) {
   const [isConnected, setIsConnected] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const onEventRef = useRef(onEvent);
+  const lastEventIdRef = useRef<string | null>(null);
   onEventRef.current = onEvent;
 
   const connect = useCallback(async () => {
@@ -27,7 +28,13 @@ export function useSSE({ sessionId, onEvent, enabled = true }: UseSSEProps) {
       const headers: Record<string, string> = {};
       if (token) headers['Authorization'] = `Bearer ${token}`;
 
-      const response = await fetch(`${API_BASE_URL}/v1/sessions/${sessionId}/stream`, {
+      // Include last event ID for reconnect replay
+      let url = `${API_BASE_URL}/v1/sessions/${sessionId}/stream`;
+      if (lastEventIdRef.current) {
+        url += `?last_event_id=${encodeURIComponent(lastEventIdRef.current)}`;
+      }
+
+      const response = await fetch(url, {
         headers,
         signal: controller.signal,
       });
@@ -54,7 +61,9 @@ export function useSSE({ sessionId, onEvent, enabled = true }: UseSSEProps) {
 
         for (const line of parts) {
           const trimmed = line.trim();
-          if (trimmed.startsWith('event: ')) {
+          if (trimmed.startsWith('id: ')) {
+            lastEventIdRef.current = trimmed.slice(4);
+          } else if (trimmed.startsWith('event: ')) {
             currentEvent = trimmed.slice(7);
           } else if (trimmed.startsWith('data: ')) {
             const raw = trimmed.slice(6);

@@ -24,6 +24,7 @@ from src.negotiation.infrastructure.models import NegotiationSessionModel
 from src.settlement.infrastructure.models import EscrowContractModel
 from src.admin.models import LLMCallLogModel, BroadcastModel
 from src.admin.schemas.admin_schemas import (
+    ActivityItem,
     AdminAgentItem,
     AdminEnterpriseItem,
     AdminStatsResponse,
@@ -181,7 +182,7 @@ class AdminService:
 
     # ── 2. GET /v1/admin/enterprises ──────────────────────────────────────────
 
-    async def list_enterprises(self) -> list[AdminEnterpriseItem]:
+    async def list_enterprises(self, limit: int = 20, offset: int = 0) -> list[AdminEnterpriseItem]:
         """List all enterprises with user_count via subquery JOIN. Ordered by created_at DESC."""
         # Subquery: count users per enterprise
         user_count_subq = (
@@ -207,6 +208,8 @@ class AdminService:
                 EnterpriseModel.id == user_count_subq.c.enterprise_id,
             )
             .order_by(EnterpriseModel.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
 
         return [
@@ -274,7 +277,7 @@ class AdminService:
 
     # ── 4. GET /v1/admin/users ────────────────────────────────────────────────
 
-    async def list_users(self) -> list[AdminUserItem]:
+    async def list_users(self, limit: int = 20, offset: int = 0) -> list[AdminUserItem]:
         """List all users with enterprise_name via JOIN. Non-ADMIN roles mapped to 'USER'."""
         result = await self._db.execute(
             select(
@@ -289,6 +292,8 @@ class AdminService:
             )
             .join(EnterpriseModel, UserModel.enterprise_id == EnterpriseModel.id)
             .order_by(UserModel.created_at.desc())
+            .limit(limit)
+            .offset(offset)
         )
 
         return [
@@ -512,7 +517,66 @@ class AdminService:
             for row in rows
         ]
 
-    # ── 10. POST /v1/admin/broadcast ──────────────────────────────────────────
+    # ── 10. GET /v1/admin/activity ───────────────────────────────────────────
+
+    async def list_activity(self, limit: int = 5) -> list[ActivityItem]:
+        """Aggregate recent platform events from escrows and sessions."""
+        items: list[ActivityItem] = []
+
+        # Recent escrow state changes
+        try:
+            escrow_result = await self._db.execute(
+                select(
+                    EscrowContractModel.id,
+                    EscrowContractModel.status,
+                    EscrowContractModel.amount_microalgo,
+                    EscrowContractModel.updated_at,
+                )
+                .order_by(EscrowContractModel.updated_at.desc())
+                .limit(limit)
+            )
+            for row in escrow_result.all():
+                amount_algo = (row.amount_microalgo or 0) / 1_000_000
+                items.append(ActivityItem(
+                    id=str(row.id),
+                    event_type="escrow",
+                    title=f"Escrow {row.status}",
+                    detail="smart_contract",
+                    amount=f"{amount_algo:.2f} ALGO",
+                    created_at=row.updated_at.isoformat() if isinstance(row.updated_at, datetime) else str(row.updated_at),
+                ))
+        except Exception:
+            pass
+
+        # Recent session completions
+        try:
+            terminal_statuses = ("AGREED", "FAILED", "WALK_AWAY", "TIMEOUT")
+            session_result = await self._db.execute(
+                select(
+                    NegotiationSessionModel.id,
+                    NegotiationSessionModel.status,
+                    NegotiationSessionModel.updated_at,
+                )
+                .where(NegotiationSessionModel.status.in_(terminal_statuses))
+                .order_by(NegotiationSessionModel.updated_at.desc())
+                .limit(limit)
+            )
+            for row in session_result.all():
+                items.append(ActivityItem(
+                    id=str(row.id),
+                    event_type="negotiation",
+                    title=f"Session {row.status}",
+                    detail="negotiation_engine",
+                    created_at=row.updated_at.isoformat() if isinstance(row.updated_at, datetime) else str(row.updated_at),
+                ))
+        except Exception:
+            pass
+
+        # Sort by created_at desc and limit
+        items.sort(key=lambda x: x.created_at, reverse=True)
+        return items[:limit]
+
+    # ── 11. POST /v1/admin/broadcast ──────────────────────────────────────────
 
     async def broadcast(
         self, request: BroadcastRequest, sender_id: uuid.UUID

@@ -83,7 +83,13 @@ export default function AdminPage() {
 
   const { data: health } = useQuery({
     queryKey: ['health'],
-    queryFn: () => api.get('/health').then(r => r.data),
+    queryFn: () => api.get('/health').then(r => r.data.data),
+    enabled: activeTab === 'overview',
+  });
+
+  const { data: recentActivity = [] } = useQuery<{ id: string; event_type: string; title: string; detail: string; actor?: string; amount?: string; created_at: string }[]>({
+    queryKey: ['admin-activity'],
+    queryFn: () => api.get('/v1/admin/activity?limit=5').then(r => r.data.data),
     enabled: activeTab === 'overview',
   });
 
@@ -188,7 +194,7 @@ export default function AdminPage() {
             <StatCard label="Total Enterprises" value={stats?.total_enterprises ?? '-'} icon={Building2} trend={{ direction: 'up', value: "+3 this month"}} />
             <StatCard label="Total Users" value={stats?.total_users ?? '-'} icon={Users} trend={{ direction: 'up', value: "+8 this month"}} />
             <StatCard label="Active Sessions" value={stats?.active_sessions ?? '-'} icon={Play} />
-            <StatCard label="Total Escrow" value={stats ? `₹28.4 Cr` : '-'} icon={Landmark} trend={{ direction: 'up', value: "+₹4.2 Cr"}} />
+            <StatCard label="Total Escrow" value={stats ? formatCurrency(stats.total_escrow_value) : '-'} icon={Landmark} />
             <StatCard label="LLM Calls Today" value={stats?.llm_calls_today ?? '-'} icon={Brain} trend={{ direction: 'up', value: "+12%"}} />
             <StatCard label="Success Rate" value={stats ? `${stats.success_rate}%` : '-'} icon={TrendingUp} trend={{ direction: 'up', value: "+2.1%"}} />
           </div>
@@ -206,19 +212,19 @@ export default function AdminPage() {
                 <div className="space-y-4">
                   <div className="flex justify-between items-center py-2 border-b border-border">
                     <span className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Activity className="h-4 w-4" /> Database</span>
-                    <HealthBadge status={health?.status === 'ok' ? 'healthy' : 'degraded'} />
+                    <HealthBadge status={health?.services?.database === 'healthy' ? 'healthy' : 'degraded'} />
                   </div>
                   <div className="flex justify-between items-center py-2 border-b border-border">
                     <span className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Activity className="h-4 w-4" /> Redis Cache</span>
-                    <HealthBadge status="healthy" />
+                    <HealthBadge status={health?.services?.redis === 'healthy' ? 'healthy' : 'degraded'} />
                   </div>
                   <div className="flex justify-between items-center py-2 border-b border-border">
                     <span className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Activity className="h-4 w-4" /> Algorand Service</span>
-                    <HealthBadge status="healthy" />
+                    <HealthBadge status={health?.services?.algorand === 'healthy' ? 'healthy' : 'degraded'} />
                   </div>
                   <div className="flex justify-between items-center py-2 border-b border-border">
                     <span className="text-sm font-medium text-muted-foreground flex items-center gap-2"><Activity className="h-4 w-4" /> LLM Engine</span>
-                    <HealthBadge status="healthy" />
+                    <HealthBadge status={health?.services?.llm === 'healthy' ? 'healthy' : 'degraded'} />
                   </div>
                 </div>
               </div>
@@ -252,37 +258,26 @@ export default function AdminPage() {
               <div className="bg-card border border-border rounded-lg p-6">
                 <SectionHeader title="Recent Activity" />
                 <div className="space-y-4">
-                  <div className="flex gap-3 items-start py-2 border-b border-border">
-                    <div className="bg-primary/20 p-2 rounded-md"><Landmark className="h-4 w-4 text-primary" /></div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">Escrow escrow-001 RELEASED</p>
-                      <p className="text-xs text-muted-foreground truncate">smart_contract &bull; {formatDate(new Date().toISOString())}</p>
-                    </div>
-                    <span className="text-xs font-mono text-primary font-medium shrink-0">₹2.01 Cr</span>
-                  </div>
-                  <div className="flex gap-3 items-start py-2 border-b border-border">
-                    <div className="bg-green-500/20 p-2 rounded-md"><FileText className="h-4 w-4 text-green-500" /></div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">New FEMA Export</p>
-                      <p className="text-xs text-muted-foreground truncate">admin@cadencia.io</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-3 items-start py-2 border-b border-border">
-                    <div className="bg-blue-500/20 p-2 rounded-md"><Cpu className="h-4 w-4 text-blue-500" /></div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">Agent Session sess-003 Paused</p>
-                      <p className="text-xs text-muted-foreground truncate">System Timeout</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-3 items-start py-2">
-                    <div className="bg-amber-500/20 p-2 rounded-md"><User className="h-4 w-4 text-amber-500" /></div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-foreground">User Suspended</p>
-                      <p className="text-xs text-muted-foreground truncate">Anil Verma (admin)</p>
-                    </div>
-                  </div>
+                  {recentActivity.length > 0 ? (
+                    recentActivity.map((item, idx) => (
+                      <div key={item.id} className={`flex gap-3 items-start py-2 ${idx < recentActivity.length - 1 ? 'border-b border-border' : ''}`}>
+                        <div className={`p-2 rounded-md ${item.event_type === 'escrow' ? 'bg-primary/20' : 'bg-blue-500/20'}`}>
+                          {item.event_type === 'escrow' ? <Landmark className="h-4 w-4 text-primary" /> : <Cpu className="h-4 w-4 text-blue-500" />}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground">{item.title}</p>
+                          <p className="text-xs text-muted-foreground truncate">{item.detail} &bull; {formatDate(item.created_at)}</p>
+                        </div>
+                        {item.amount && (
+                          <span className="text-xs font-mono text-primary font-medium shrink-0">{item.amount}</span>
+                        )}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-sm text-muted-foreground py-8 text-center bg-muted/20 rounded-lg border border-border/50">No recent activity</div>
+                  )}
                 </div>
-                <Button variant="ghost" className="w-full mt-4 text-xs text-muted-foreground" onClick={() => setActiveTab('users')}>
+                <Button variant="ghost" className="w-full mt-4 text-xs text-muted-foreground" onClick={() => setActiveTab('llm-logs')}>
                   View all logs &rarr;
                 </Button>
               </div>

@@ -20,7 +20,7 @@ from pydantic import BaseModel, Field, field_validator
 class WalletLinkRequest(BaseModel):
     """POST /v1/wallet/link — body submitted after Pera Wallet signs the challenge."""
 
-    address: str = Field(
+    algorand_address: str = Field(
         ...,
         min_length=58,
         max_length=58,
@@ -31,7 +31,7 @@ class WalletLinkRequest(BaseModel):
         description="Base64-encoded Ed25519 signature of the challenge nonce",
     )
 
-    @field_validator("address")
+    @field_validator("algorand_address")
     @classmethod
     def validate_algorand_address(cls, v: str) -> str:
         try:

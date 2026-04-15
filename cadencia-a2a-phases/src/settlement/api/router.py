@@ -318,7 +318,7 @@ class SubmitSignedFundRequest(BaseModel):
 class SubmitSignedFundResponse(BaseModel):
     """Result of submitting signed transactions to Algorand."""
 
-    tx_id: str = Field(description="Algorand transaction ID")
+    txid: str = Field(description="Algorand transaction ID")
     confirmed_round: int = Field(description="Block round when confirmed")
 
 
@@ -437,5 +437,8 @@ async def submit_signed_fund(
         confirmed_round=result["confirmed_round"],
     )
 
-    return success_response(SubmitSignedFundResponse(**result))
+    return success_response(SubmitSignedFundResponse(
+        txid=result["tx_id"],
+        confirmed_round=result["confirmed_round"],
+    ))
 

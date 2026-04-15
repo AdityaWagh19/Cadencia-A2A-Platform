@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 
 class CreateSessionRequest(BaseModel):
@@ -39,6 +39,10 @@ class OfferResponse(BaseModel):
     is_human_override: bool
     created_at: datetime
 
+    @field_serializer('price')
+    def serialize_price(self, value: Decimal) -> float:
+        return float(value)
+
 
 class SessionResponse(BaseModel):
     session_id: uuid.UUID
@@ -57,6 +61,10 @@ class SessionResponse(BaseModel):
     expires_at: datetime
     schema_failure_count: int = 0
     stall_counter: int = 0
+
+    @field_serializer('agreed_price')
+    def serialize_agreed_price(self, value: Decimal | None) -> float | None:
+        return float(value) if value is not None else None
 
 
 class IntelligenceResponse(BaseModel):

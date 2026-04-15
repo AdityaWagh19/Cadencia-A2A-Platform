@@ -104,7 +104,7 @@ async def get_wallet_challenge(
 
     return success_response(
         WalletChallengeResponse(
-            challenge=challenge.challenge_id,
+            challenge=challenge.message_to_sign,
             enterprise_id=str(enterprise_id),
             expires_at=challenge.expires_at.isoformat(),
         )
@@ -135,7 +135,7 @@ async def link_wallet(
     existing = await db.execute(
         select(EnterpriseModel).where(
             and_(
-                EnterpriseModel.algorand_wallet == body.address,
+                EnterpriseModel.algorand_wallet == body.algorand_address,
                 EnterpriseModel.id != enterprise_id,
             )
         )
@@ -178,7 +178,7 @@ async def link_wallet(
     # Verify the signature
     is_valid = await verifier.verify_challenge(
         challenge_id=challenge_id,
-        algorand_address=body.address,
+        algorand_address=body.algorand_address,
         signature_b64=body.signature,
     )
     if not is_valid:
@@ -192,19 +192,19 @@ async def link_wallet(
         LinkWalletCommand(
             enterprise_id=enterprise_id,
             requesting_user_id=current_user.id,
-            algorand_address=body.address,
+            algorand_address=body.algorand_address,
         )
     )
 
     log.info(
         "wallet_linked_shortform",
         enterprise_id=str(enterprise_id),
-        address=body.address[:8] + "...",
+        address=body.algorand_address[:8] + "...",
     )
 
     return success_response(
         WalletLinkResponse(
-            algorand_address=body.address,
+            algorand_address=body.algorand_address,
             message="Wallet linked successfully",
         )
     )

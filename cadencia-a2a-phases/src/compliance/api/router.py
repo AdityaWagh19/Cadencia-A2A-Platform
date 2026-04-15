@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+import io
 import uuid
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from src.shared.api.responses import ApiResponse, success_response
@@ -262,9 +263,10 @@ async def request_bulk_export(
     # Store in Redis if we captured bytes
     if zip_bytes_holder.get("bytes"):
         try:
-            from src.shared.infrastructure.cache import redis_client
+            from src.shared.infrastructure.cache.redis_client import get_redis_client
+            redis = get_redis_client()
             redis_key = f"compliance:export:{job_id}"
-            await redis_client.setex(redis_key, 3600, zip_bytes_holder["bytes"])
+            await redis.setex(redis_key, 3600, zip_bytes_holder["bytes"])
         except Exception:
             log.warning("bulk_export_redis_store_failed", job_id=str(job_id))
 
@@ -284,4 +286,46 @@ async def request_bulk_export(
             created_at=job.get("created_at") or datetime.utcnow(),
             completed_at=job.get("completed_at"),
         )
+    )
+
+
+# ── GET /v1/compliance/export/zip/{job_id}/download ─────────────────────────
+
+
+@compliance_router.get(
+    "/export/zip/{job_id}/download",
+    summary="Download a previously generated compliance ZIP export",
+    dependencies=[Depends(require_role("ADMIN")), Depends(rate_limit)],
+)
+async def download_compliance_zip(
+    job_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+) -> StreamingResponse:
+    """
+    Stream the ZIP file stored in Redis by the POST /export/zip handler.
+    The ZIP is stored with a 1-hour TTL under key compliance:export:{job_id}.
+    """
+    from src.shared.infrastructure.cache.redis_client import get_redis_client
+
+    redis = get_redis_client()
+    redis_key = f"compliance:export:{job_id}"
+    zip_data = await redis.get(redis_key)
+
+    if not zip_data:
+        raise HTTPException(
+            status_code=404,
+            detail="Export job not found or expired. Please request a new export.",
+        )
+
+    # zip_data may be str (if decode_responses=True) or bytes
+    if isinstance(zip_data, str):
+        zip_data = zip_data.encode("latin-1")
+
+    return StreamingResponse(
+        io.BytesIO(zip_data),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="compliance_{job_id}.zip"',
+            "Content-Length": str(len(zip_data)),
+        },
     )

@@ -9,7 +9,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from src.compliance.domain.audit_log import AuditEntry
 from src.compliance.domain.fema_record import FEMARecord
@@ -70,6 +70,10 @@ class FEMARecordResponse(BaseModel):
     merkle_root: str
     generated_at: datetime
 
+    @field_serializer('amount_inr', 'amount_algo', 'fx_rate_inr_per_algo')
+    def serialize_decimal(self, value: Decimal) -> float:
+        return float(value)
+
     @classmethod
     def from_domain(cls, record: FEMARecord) -> "FEMARecordResponse":
         return cls(
@@ -103,6 +107,10 @@ class GSTRecordResponse(BaseModel):
     sgst_amount: Decimal
     total_tax: Decimal
     generated_at: datetime
+
+    @field_serializer('taxable_amount', 'igst_amount', 'cgst_amount', 'sgst_amount', 'total_tax')
+    def serialize_decimal(self, value: Decimal) -> float:
+        return float(value)
 
     @classmethod
     def from_domain(cls, record: GSTRecord) -> "GSTRecordResponse":

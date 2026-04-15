@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.shared.api.responses import ApiResponse, success_response
@@ -21,6 +21,7 @@ from src.identity.api.dependencies import get_current_user
 from src.identity.domain.user import User
 
 from src.admin.schemas.admin_schemas import (
+    ActivityItem,
     AdminAgentItem,
     AdminEnterpriseItem,
     AdminStatsResponse,
@@ -88,9 +89,11 @@ async def get_stats(
     summary="List all registered enterprises with user counts",
 )
 async def list_enterprises(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     svc: AdminService = Depends(_get_admin_service),
 ) -> ApiResponse[list[AdminEnterpriseItem]]:
-    enterprises = await svc.list_enterprises()
+    enterprises = await svc.list_enterprises(limit=limit, offset=offset)
     return success_response(enterprises)
 
 
@@ -118,9 +121,11 @@ async def apply_kyc_action(
     summary="List all users across all enterprises",
 )
 async def list_users(
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     svc: AdminService = Depends(_get_admin_service),
 ) -> ApiResponse[list[AdminUserItem]]:
-    users = await svc.list_users()
+    users = await svc.list_users(limit=limit, offset=offset)
     return success_response(users)
 
 
@@ -207,7 +212,22 @@ async def list_llm_logs(
     return success_response(logs)
 
 
-# ── 10. POST /v1/admin/broadcast ─────────────────────────────────────────────
+# ── 10. GET /v1/admin/activity ────────────────────────────────────────────────
+
+@router.get(
+    "/activity",
+    response_model=ApiResponse[list[ActivityItem]],
+    summary="Recent platform activity (escrow events, KYC, user actions)",
+)
+async def list_activity(
+    limit: int = 5,
+    svc: AdminService = Depends(_get_admin_service),
+) -> ApiResponse[list[ActivityItem]]:
+    items = await svc.list_activity(limit=limit)
+    return success_response(items)
+
+
+# ── 11. POST /v1/admin/broadcast ─────────────────────────────────────────────
 
 @router.post(
     "/broadcast",

@@ -8,7 +8,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
 from src.settlement.domain.escrow import Escrow
 from src.settlement.domain.settlement import Settlement
@@ -25,6 +25,10 @@ class EscrowResponse(BaseModel):
     amount_microalgo: int
     amount_algo: Decimal
     status: str
+
+    @field_serializer('amount_algo')
+    def serialize_amount_algo(self, value: Decimal) -> float:
+        return float(value)
     frozen: bool
     deploy_tx_id: str | None
     fund_tx_id: str | None

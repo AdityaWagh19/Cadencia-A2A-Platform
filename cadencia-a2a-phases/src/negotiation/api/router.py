@@ -10,10 +10,11 @@ import uuid
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from src.identity.api.dependencies import get_current_user, require_role
+from src.identity.domain.user import User
 from src.negotiation.api.dependencies import get_negotiation_service, get_sse_publisher
 from src.negotiation.api.schemas import (
     CreateSessionRequest,
@@ -283,12 +284,27 @@ async def stream_session(
     session_id: uuid.UUID,
     request: Request,
     last_event_id: str | None = Query(None, alias="Last-Event-ID"),
+    current_user: User = Depends(get_current_user),
+    svc: NegotiationService = Depends(get_negotiation_service),
 ) -> StreamingResponse:
     """
     GET /v1/sessions/{id}/stream — SSE live agent turns.
 
     Supports Last-Event-ID header for reconnect replay.
+    Requires authentication and enterprise membership.
     """
+    from src.shared.domain.exceptions import NotFoundError
+
+    session = await svc.session_repo.get_by_id(session_id)
+    if not session:
+        raise NotFoundError("NegotiationSession", session_id)
+
+    if current_user.enterprise_id not in (
+        session.buyer_enterprise_id,
+        session.seller_enterprise_id,
+    ):
+        raise HTTPException(status_code=403, detail="Not a party to this session")
+
     sse_pub = await get_sse_publisher()
 
     async def event_generator():

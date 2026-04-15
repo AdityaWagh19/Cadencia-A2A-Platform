@@ -220,8 +220,8 @@ class WalletChallengeResponse(BaseModel):
     expires_at: str = Field(description="ISO 8601 expiry timestamp (5 min TTL)")
 
 
-class WalletLinkRequest(BaseModel):
-    """Request to link a wallet after signing the challenge."""
+class EnterpriseWalletLinkRequest(BaseModel):
+    """Enterprise-scoped wallet link request (used by /v1/enterprises/{id}/wallet/link)."""
 
     algorand_address: str = Field(
         min_length=58, max_length=58,

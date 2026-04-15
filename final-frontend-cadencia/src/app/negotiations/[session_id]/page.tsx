@@ -183,6 +183,17 @@ export default function NegotiationRoomPage() {
           </div>
         </div>
 
+        {/* SSE Disconnect Warning */}
+        {!isConnected && isActive && (
+          <div className="flex items-center gap-3 bg-yellow-950 border border-yellow-800 rounded-lg p-4 mb-6">
+            <AlertTriangle className="h-5 w-5 text-yellow-400 shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-yellow-400">Live updates disconnected</p>
+              <p className="text-xs text-muted-foreground">Attempting to reconnect. Offers may be delayed until connection is restored.</p>
+            </div>
+          </div>
+        )}
+
         {/* Banners */}
         {sessionStatus === 'AGREED' && (
           <div className="flex items-center gap-3 bg-green-950 border border-green-900 rounded-lg p-4 mb-6">

@@ -124,3 +124,14 @@ class BroadcastResponse(BaseModel):
     message_id: str
     recipients: int
     delivered: bool
+
+
+class ActivityItem(BaseModel):
+    """Single item in GET /v1/admin/activity list."""
+    id: str
+    event_type: str
+    title: str
+    detail: str
+    actor: Optional[str] = None
+    amount: Optional[str] = None
+    created_at: str

@@ -34,7 +34,7 @@ from src.identity.api.schemas import (
     CreateAPIKeyRequest,
     UserMeResponse,
     WalletChallengeResponse,
-    WalletLinkRequest,
+    EnterpriseWalletLinkRequest,
     WalletUnlinkResponse,
     WalletBalanceResponse,
     OptedInApp,
@@ -485,7 +485,7 @@ async def get_wallet_challenge(
 )
 async def link_wallet(
     enterprise_id: uuid.UUID,
-    request_body: WalletLinkRequest,
+    request_body: EnterpriseWalletLinkRequest,
     current_user: User = Depends(get_current_user),
     svc: IdentityService = Depends(get_identity_service),
 ) -> ApiResponse[EnterpriseResponse]:
