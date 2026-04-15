@@ -79,11 +79,52 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.version=${{ steps.meta.outputs.version }}
 
+  # ── Deploy to EC2 ─────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: publish
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: GHCR_TOKEN
+          script: |
+            set -e
+            cd /home/ubuntu/cadencia
+
+            # Pull latest compose file from repo
+            git pull origin main
+
+            # Authenticate with GitHub Container Registry
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u AdityaWagh19 --password-stdin
+
+            # Pull latest images
+            docker compose -f docker-compose.cloud.yml pull
+
+            # Run database migrations before swapping containers
+            docker compose -f docker-compose.cloud.yml run --rm backend alembic upgrade head
+
+            # Restart containers with fresh images
+            docker compose -f docker-compose.cloud.yml down --remove-orphans
+            docker compose -f docker-compose.cloud.yml up -d
+
+            # Clean up old dangling images
+            docker image prune -f
+
+            echo "Deployment complete."
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # ── Create GitHub Release ────────────────────────────────────────────────
   release:
     name: GitHub Release
     runs-on: ubuntu-latest
-    needs: publish
+    needs: deploy
     permissions:
       contents: write
 

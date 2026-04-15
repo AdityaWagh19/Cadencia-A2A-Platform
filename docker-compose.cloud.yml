@@ -1,96 +1,69 @@
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Cadencia Full Stack — Docker Compose (Cloud / Supabase)
-# Services: Redis, MinIO, Algorand, Backend (FastAPI), Frontend (Next.js)
+# Cadencia Full Stack — Docker Compose (EC2 Cloud Deployment)
+# Services: Redis, Backend (FastAPI), Frontend (Next.js)
 #
-# Differences from docker-compose.yml:
-#   - NO postgres service   → database is Supabase Cloud (ap-south-1)
-#   - NO migrate service    → run `alembic upgrade head` separately against
-#                             DATABASE_DIRECT_URL (port 5432) before deploying
-#
-# Usage:
-#   docker compose -f docker-compose.cloud.yml up --build
+# Architecture:
+#   - Database: Supabase Cloud (no local Postgres)
+#   - S3: Real AWS S3 (no MinIO)
+#   - Algorand: TestNet via Nodely API (no local node)
+#   - Images: Pre-built from GHCR (GitHub Container Registry)
 #
 # Prerequisites:
-#   1. backend/.env has DATABASE_URL and DATABASE_DIRECT_URL set to Supabase
-#   2. Alembic migrations already applied: alembic upgrade head
+#   1. .env file in project root with all secrets (see deployment.md Phase 3)
+#   2. Docker + Docker Compose installed on EC2
+#   3. Authenticated with GHCR: docker login ghcr.io
+#
+# Usage:
+#   docker compose -f docker-compose.cloud.yml pull
+#   docker compose -f docker-compose.cloud.yml run --rm backend alembic upgrade head
+#   docker compose -f docker-compose.cloud.yml up -d
 # ═══════════════════════════════════════════════════════════════════════════
 
 services:
 
-  # ── Redis 7 ─────────────────────────────────────────────────────────────
+  # ── Redis 7 (password-secured) ────────────────────────────────────────────
   redis:
     image: redis:7-alpine
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    command: redis-server --requirepass ${REDIS_PASSWORD}
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+    # No ports exposed — only accessible within Docker network
 
-  # ── MinIO (S3-compatible, for agent memory vault) ─────────────────────
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - miniodata:/data
-
-  # ── Algorand localnet (dev mode) ──────────────────────────────────────
-  algorand:
-    image: algorand/algod:latest
-    restart: unless-stopped
-    environment:
-      DEV_MODE: "1"
-      TOKEN: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      ALGOD_PORT: "8080"
-    ports:
-      - "4001:8080"   # algod REST API  (internal 8080 → host 4001)
-      - "4002:7833"   # KMD REST API    (internal 7833 → host 4002)
-    volumes:
-      - algoranddata:/algod/data
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 10
-      start_period: 30s
-
-  # ── Backend (FastAPI) ───────────────────────────────────────────────────
+  # ── Backend (FastAPI) ─────────────────────────────────────────────────────
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-      target: production
+    image: ghcr.io/adityawagh19/cadencia-a2a-platform/backend:latest
     restart: unless-stopped
-    ports:
-      - "8000:8000"
     env_file:
-      - ./backend/.env          # DATABASE_URL → Supabase pooler (port 6543)
+      - .env
     environment:
-      # Override service-internal URLs for Docker networking
-      REDIS_URL: redis://redis:6379/0
-      AWS_S3_ENDPOINT: http://minio:9000
-      # Use TestNet (not local dev node) so platform wallet has real funds
+      # ── Production flags ──
+      APP_ENV: production
+      DEBUG: "false"
+      ESCROW_DRY_RUN_ENABLED: "false"
+
+      # ── Redis (password-authenticated, Docker internal) ──
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+
+      # ── CORS (set in .env on EC2) ──
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
+
+      # ── Algorand TestNet (no local node) ──
+      ALGORAND_NETWORK: testnet
       ALGORAND_ALGOD_ADDRESS: https://testnet-api.4160.nodely.dev
       ALGORAND_ALGOD_TOKEN: ""
-      CORS_ALLOWED_ORIGINS: http://localhost:3000
-      # Supabase PgBouncer uses a private root CA (not in any public trust store).
-      # asyncpg reads PGSSLROOTCERT when ssl="require" (sslmode string) to load the CA
-      # into its internally-built SSLContext — the only path where SNI + cert verify both work.
+
+      # ── Real AWS S3 (no MinIO — leave endpoint blank for native AWS) ──
+      AWS_S3_ENDPOINT: ""
+
+      # ── Supabase PgBouncer private CA for SSL verification ──
       PGSSLROOTCERT: /app/supabase-root-ca.pem
     depends_on:
       redis:
-        condition: service_healthy
-      algorand:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -98,18 +71,16 @@ services:
       timeout: 10s
       start_period: 60s
       retries: 3
+    # No ports exposed — frontend proxies API calls via Next.js rewrites
 
   # ── Frontend (Next.js) ──────────────────────────────────────────────────
   frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/adityawagh19/cadencia-a2a-platform/frontend:latest
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "80:3000"
     environment:
-      # NEXT_PUBLIC_API_URL intentionally unset → defaults to '' → relative URLs → no CORS
-      # Server-side proxy rewrites use Docker internal network to reach backend
+      # Server-side proxy rewrites → backend via Docker internal network
       NEXT_INTERNAL_BACKEND_URL: http://backend:8000
       NEXT_PUBLIC_ENABLE_MOCKS: "false"
       NEXT_PUBLIC_ALGORAND_NETWORK: testnet
@@ -117,8 +88,3 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-
-
-volumes:
-  miniodata:
-  algoranddata:
