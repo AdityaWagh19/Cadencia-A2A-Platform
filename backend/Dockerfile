@@ -1,0 +1,99 @@
+# ═══════════════════════════════════════════════════════════════
+# Cadencia — Multi-Stage Dockerfile
+# context.md §10: ap-south-1 — image built for linux/amd64
+# Targets: base → builder → production → migration → test
+# ═══════════════════════════════════════════════════════════════
+
+# ── BASE stage ────────────────────────────────────────────────
+FROM python:3.12-slim AS base
+
+# Security: non-root user
+RUN groupadd --gid 1001 cadencia \
+    && useradd --uid 1001 --gid 1001 --no-create-home cadencia
+
+WORKDIR /app
+
+# Runtime OS deps + CA certificates
+# Supabase PgBouncer uses a private PKI (Supabase Root 2021 CA) that is NOT in any
+# public trust store. We install it into the system CA directory so that Python's
+# ssl.create_default_context() (used by asyncpg ssl=True) naturally trusts it.
+COPY supabase-root-ca.pem /usr/local/share/ca-certificates/supabase-root-ca.crt
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libpq-dev \
+    curl \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Upgrade pip + setuptools (setuptools>=68 required for setuptools.backends on Python 3.12)
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# ── BUILDER stage ─────────────────────────────────────────────
+FROM base AS builder
+
+# Install Python deps into /install prefix (isolate from system)
+COPY pyproject.toml ./
+# Ensure latest setuptools before installing project (fixes setuptools.backends on py3.12)
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir --prefix=/install .
+
+# ── PRODUCTION stage ──────────────────────────────────────────
+FROM base AS production
+
+LABEL maintainer="cadencia-team" \
+      description="Cadencia API — AI-native B2B trade marketplace" \
+      version="0.1.0"
+
+# Copy installed deps from builder
+COPY --from=builder /install /usr/local
+
+# Copy application source
+COPY --chown=cadencia:cadencia src/ ./src/
+COPY --chown=cadencia:cadencia main.py ./
+COPY --chown=cadencia:cadencia alembic/ ./alembic/
+COPY --chown=cadencia:cadencia alembic.ini ./
+COPY --chown=cadencia:cadencia conftest.py ./
+COPY --chown=cadencia:cadencia pyproject.toml ./
+# Compiled Puya TEAL artifacts for on-chain deployment
+COPY --chown=cadencia:cadencia artifacts/ ./artifacts/
+# Supabase private root CA — required for asyncpg ssl verify (pooler uses non-public PKI)
+COPY --chown=cadencia:cadencia supabase-root-ca.pem ./
+
+# Drop to non-root
+USER cadencia
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+EXPOSE 8000
+
+# Production entrypoint: uvicorn with uvloop
+CMD ["python", "-m", "uvicorn", "main:app", \
+     "--host", "0.0.0.0", \
+     "--port", "8000", \
+     "--workers", "2", \
+     "--log-level", "warning", \
+     "--timeout-graceful-shutdown", "30"]
+
+# ── MIGRATION stage ───────────────────────────────────────────
+FROM production AS migration
+# Run as one-off ECS task before main deployment
+USER cadencia
+CMD ["alembic", "upgrade", "head"]
+
+# ── TEST stage ────────────────────────────────────────────────
+FROM base AS test
+
+COPY --from=builder /install /usr/local
+
+# Install dev/test deps
+COPY pyproject.toml ./
+RUN pip install --no-cache-dir ".[dev]" 2>/dev/null || true
+RUN pip install --no-cache-dir pytest pytest-anyio pytest-asyncio
+
+# Copy the full project
+COPY --chown=cadencia:cadencia . .
+
+USER cadencia
+CMD ["python", "-m", "pytest", "tests/unit/", "-x", "--tb=short", "-q"]

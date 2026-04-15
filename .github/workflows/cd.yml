@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # Cadencia Platform — CD Pipeline
 # Builds and pushes Docker images to GitHub Container Registry (ghcr.io)
-# on tagged releases. Can be extended for deployment to cloud providers.
+# on tagged releases. Can be extended for AWS EC2/ECS deployment.
 # ═══════════════════════════════════════════════════════════════════════════
 
 name: CD
@@ -46,8 +46,8 @@ jobs:
       - name: Build & push backend image
         uses: docker/build-push-action@v6
         with:
-          context: ./cadencia-a2a-phases
-          file: ./cadencia-a2a-phases/Dockerfile
+          context: ./backend
+          file: ./backend/Dockerfile
           target: production
           push: true
           tags: |
@@ -62,15 +62,17 @@ jobs:
       - name: Build & push frontend image
         uses: docker/build-push-action@v6
         with:
-          context: ./final-frontend-cadencia
-          file: ./final-frontend-cadencia/Dockerfile
+          context: ./frontend
+          file: ./frontend/Dockerfile
           push: true
           tags: |
             ${{ env.FRONTEND_IMAGE }}:${{ steps.meta.outputs.version }}
             ${{ env.FRONTEND_IMAGE }}:latest
           build-args: |
-            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL || 'http://localhost:8000' }}
+            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
             NEXT_PUBLIC_ENABLE_MOCKS=false
+            NEXT_PUBLIC_ALGORAND_NETWORK=testnet
+            NEXT_PUBLIC_ALGOD_SERVER=https://testnet-api.4160.nodely.dev
           cache-from: type=gha
           cache-to: type=gha,mode=max
           labels: |

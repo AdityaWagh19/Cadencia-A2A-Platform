@@ -2,7 +2,8 @@
 .env
 .env.local
 .env.*.local
-*.pem
+# NOTE: supabase-root-ca.pem is intentionally tracked — required by Dockerfile
+# *.pem is NOT globally excluded to allow supabase-root-ca.pem to be committed
 
 # ── Python ───────────────────────────────────────────────────
 __pycache__/
@@ -30,7 +31,21 @@ docker-compose.override.yml
 *.swp
 *.swo
 .DS_Store
+Thumbs.db
 
 # ── Agent/AI config ──────────────────────────────────────────
 .claude/
 .gemini/
+.trae/
+
+# ── Logs & runtime output ────────────────────────────────────
+*.log
+seed_output.txt
+seed_run_log.txt
+backend_logs.txt
+simulation_output.txt
+
+# ── Terraform state ──────────────────────────────────────────
+*.tfstate
+*.tfstate.*
+.terraform/

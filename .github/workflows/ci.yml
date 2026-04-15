@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: cadencia-a2a-phases
+        working-directory: backend
 
     steps:
       - uses: actions/checkout@v4
@@ -32,7 +32,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: cadencia-a2a-phases/pyproject.toml
+          cache-dependency-path: backend/pyproject.toml
 
       - name: Install dependencies
         run: |
@@ -68,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: final-frontend-cadencia
+        working-directory: frontend
 
     steps:
       - uses: actions/checkout@v4
@@ -78,7 +78,7 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: final-frontend-cadencia/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
         run: npm ci
@@ -90,8 +90,10 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          NEXT_PUBLIC_API_URL: http://localhost:8000
+          NEXT_PUBLIC_API_URL: ""
           NEXT_PUBLIC_ENABLE_MOCKS: "false"
+          NEXT_PUBLIC_ALGORAND_NETWORK: testnet
+          NEXT_PUBLIC_ALGOD_SERVER: https://testnet-api.4160.nodely.dev
 
   # ── Docker: Build all images ─────────────────────────────────────────────
   docker:
@@ -109,8 +111,8 @@ jobs:
       - name: Build backend image
         uses: docker/build-push-action@v6
         with:
-          context: ./cadencia-a2a-phases
-          file: ./cadencia-a2a-phases/Dockerfile
+          context: ./backend
+          file: ./backend/Dockerfile
           target: production
           push: false
           tags: cadencia-backend:${{ github.sha }}
@@ -120,8 +122,8 @@ jobs:
       - name: Build frontend image
         uses: docker/build-push-action@v6
         with:
-          context: ./final-frontend-cadencia
-          file: ./final-frontend-cadencia/Dockerfile
+          context: ./frontend
+          file: ./frontend/Dockerfile
           push: false
           tags: cadencia-frontend:${{ github.sha }}
           cache-from: type=gha
