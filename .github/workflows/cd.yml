@@ -1,7 +1,7 @@
 # ═══════════════════════════════════════════════════════════════════════════
 # Cadencia Platform — CD Pipeline
 # Builds and pushes Docker images to GitHub Container Registry (ghcr.io)
-# on tagged releases. Can be extended for AWS EC2/ECS deployment.
+# on tagged releases. Deploys to EC2 via SSH.
 # ═══════════════════════════════════════════════════════════════════════════
 
 name: CD
@@ -17,17 +17,25 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  BACKEND_IMAGE: ghcr.io/${{ github.repository }}/backend
-  FRONTEND_IMAGE: ghcr.io/${{ github.repository }}/frontend
 
 jobs:
   # ── Build & Push Docker Images ───────────────────────────────────────────
   publish:
     name: Publish Docker Images
     runs-on: ubuntu-latest
+    outputs:
+      backend_image: ${{ steps.images.outputs.backend }}
+      frontend_image: ${{ steps.images.outputs.frontend }}
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Compute image names (lowercase)
+        id: images
+        run: |
+          REPO="${GITHUB_REPOSITORY,,}"
+          echo "backend=ghcr.io/${REPO}/backend" >> $GITHUB_OUTPUT
+          echo "frontend=ghcr.io/${REPO}/frontend" >> $GITHUB_OUTPUT
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -51,8 +59,8 @@ jobs:
           target: production
           push: true
           tags: |
-            ${{ env.BACKEND_IMAGE }}:${{ steps.meta.outputs.version }}
-            ${{ env.BACKEND_IMAGE }}:latest
+            ${{ steps.images.outputs.backend }}:${{ steps.meta.outputs.version }}
+            ${{ steps.images.outputs.backend }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
           labels: |
@@ -66,10 +74,10 @@ jobs:
           file: ./frontend/Dockerfile
           push: true
           tags: |
-            ${{ env.FRONTEND_IMAGE }}:${{ steps.meta.outputs.version }}
-            ${{ env.FRONTEND_IMAGE }}:latest
+            ${{ steps.images.outputs.frontend }}:${{ steps.meta.outputs.version }}
+            ${{ steps.images.outputs.frontend }}:latest
           build-args: |
-            NEXT_PUBLIC_API_URL=${{ vars.NEXT_PUBLIC_API_URL }}
+            NEXT_PUBLIC_API_URL=
             NEXT_PUBLIC_ENABLE_MOCKS=false
             NEXT_PUBLIC_ALGORAND_NETWORK=testnet
             NEXT_PUBLIC_ALGOD_SERVER=https://testnet-api.4160.nodely.dev
@@ -138,6 +146,6 @@ jobs:
           body: |
             ## Docker Images
             ```
-            docker pull ${{ env.BACKEND_IMAGE }}:${{ github.ref_name }}
-            docker pull ${{ env.FRONTEND_IMAGE }}:${{ github.ref_name }}
+            docker pull ${{ needs.publish.outputs.backend_image }}:${{ github.ref_name }}
+            docker pull ${{ needs.publish.outputs.frontend_image }}:${{ github.ref_name }}
             ```
