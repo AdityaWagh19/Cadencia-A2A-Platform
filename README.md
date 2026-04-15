@@ -1,6 +1,6 @@
 <br><div align="center">
 
-# 🎵 Cadencia
+# Cadencia
 
 ### AI-Native Agentic B2B Trade Platform for Indian MSMEs
 
@@ -20,27 +20,27 @@
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
-1. [Overview](#-overview)
-2. [Features](#-features)
-3. [System Architecture](#-system-architecture)
-4. [Trade Flow — End to End](#-trade-flow--end-to-end)
-5. [Domain Event Architecture](#-domain-event-architecture)
-6. [Database Schema](#-database-schema)
-7. [Smart Contract — CadenciaEscrow](#-smart-contract--cadenciaescrow)
-8. [API Reference](#-api-reference)
-9. [Tech Stack](#-tech-stack)
-10. [Codebase Statistics](#-codebase-statistics)
-11. [Quick Start (Local Dev)](#-quick-start)
-12. [Deployment](#-deployment)
-13. [Environment Variables](#-environment-variables)
-14. [Security](#-security)
-15. [Testing](#-testing)
+1. [Overview](#overview)
+2. [Features](#features)
+3. [System Architecture](#system-architecture)
+4. [Trade Flow — End to End](#trade-flow--end-to-end)
+5. [Domain Event Architecture](#domain-event-architecture)
+6. [Database Schema](#database-schema)
+7. [Smart Contract — CadenciaEscrow](#smart-contract--cadenciaescrow)
+8. [API Reference](#api-reference)
+9. [Tech Stack](#tech-stack)
+10. [Codebase Statistics](#codebase-statistics)
+11. [Quick Start (Local Dev)](#quick-start)
+12. [Deployment](#deployment)
+13. [Environment Variables](#environment-variables)
+14. [Security](#security)
+15. [Testing](#testing)
 
 ---
 
-## 🔭 Overview
+## Overview
 
 Cadencia is a **closed-loop, AI-native agentic B2B marketplace** purpose-built for Indian MSMEs. It transforms the friction-laden procurement cycle — traditionally involving phone calls, WhatsApp negotiations, manual compliance filing, and slow bank settlements — into a **single-upload autonomous workflow**.
 
@@ -71,23 +71,23 @@ Buyer uploads RFQ
 
 ---
 
-## ✨ Features
+## Features
 
 | Feature | Description |
 |---------|-------------|
-| 🤖 **AI Negotiation Engine** | Autonomous buyer + seller LLM agents with configurable risk profiles, budget ceilings, and convergence detection |
-| 🔍 **pgvector Matching** | 1536-dimensional vector embeddings with IVFFlat cosine similarity search across 10,000+ seller profiles in < 2s |
-| ⛓️ **Algorand Escrow** | ARC-4 smart contract (Puya) with deploy → fund → release → refund lifecycle; Merkle root anchored on-chain |
-| 📋 **Compliance Automation** | Auto-generated FEMA Form A2 and GST records on every settlement; PDF/CSV export; 7-year retention |
-| 📡 **Real-time SSE Stream** | Live agent negotiation turn-by-turn visibility via Server-Sent Events |
-| 🛡️ **Human Override** | Inject manual offers mid-session; agent profile learns from corrections |
-| 💹 **Treasury Dashboard** | INR/USDC pool balances, Frankfurter FX feed, 30-day liquidity runway |
-| 🔐 **Enterprise Auth** | RS256 JWT, httpOnly refresh cookies, HMAC-hashed API keys, RBAC |
-| 📊 **Observability** | Prometheus metrics, structlog JSON, Caddy security headers |
+| **AI Negotiation Engine** | Autonomous buyer + seller LLM agents with configurable risk profiles, budget ceilings, and convergence detection |
+| **pgvector Matching** | 1536-dimensional vector embeddings with IVFFlat cosine similarity search across 10,000+ seller profiles in < 2s |
+| **Algorand Escrow** | ARC-4 smart contract (Puya) with deploy → fund → release → refund lifecycle; Merkle root anchored on-chain |
+| **Compliance Automation** | Auto-generated FEMA Form A2 and GST records on every settlement; PDF/CSV export; 7-year retention |
+| **Real-time SSE Stream** | Live agent negotiation turn-by-turn visibility via Server-Sent Events |
+| **Human Override** | Inject manual offers mid-session; agent profile learns from corrections |
+| **Treasury Dashboard** | INR/USDC pool balances, Frankfurter FX feed, 30-day liquidity runway |
+| **Enterprise Auth** | RS256 JWT, httpOnly refresh cookies, HMAC-hashed API keys, RBAC |
+| **Observability** | Prometheus metrics, structlog JSON, Caddy security headers |
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
 ### Seven-Layer Architecture
 
@@ -167,7 +167,7 @@ Buyer uploads RFQ
 
 ---
 
-## 🔄 Trade Flow — End to End
+## Trade Flow — End to End
 
 ```
 BUYER                    CADENCIA BACKEND                   SELLER
@@ -219,7 +219,7 @@ BUYER                    CADENCIA BACKEND                   SELLER
 
 ---
 
-## 📡 Domain Event Architecture
+## Domain Event Architecture
 
 Events are the **only** way bounded contexts communicate. Direct cross-domain imports are prohibited and enforced by Ruff linting (TID252).
 
@@ -249,7 +249,7 @@ marketplace ──RFQConfirmed──▶ negotiation ─────────�
 
 ---
 
-## 🗄️ Database Schema
+## Database Schema
 
 ### Entity-Relationship Overview
 
@@ -295,7 +295,7 @@ CREATE INDEX ON rfqs
 
 ---
 
-## ⛓️ Smart Contract — CadenciaEscrow
+## Smart Contract — CadenciaEscrow
 
 **Language**: Algorand Python (Puya) · **Standard**: ARC-4 + ARC-56 · **Network**: Algorand TestNet
 
@@ -330,15 +330,15 @@ CREATE INDEX ON rfqs
 
 ### Safety Requirements
 
-- ✅ Every call preceded by `algod.dryrun()` — dry-run failure raises `BlockchainSimulationError` and **aborts** the transaction
-- ✅ `fund()` verifies `payment.amount == escrow.amount` atomically — partial funding rejected
-- ✅ `release()` and `refund()` blocked when `frozen==1`
-- ✅ Merkle root of all session audit events anchored on-chain in transaction Note field
-- ✅ Idempotent submission — safe to retry without double-spend
+- Every call preceded by `algod.dryrun()` — dry-run failure raises `BlockchainSimulationError` and **aborts** the transaction
+- `fund()` verifies `payment.amount == escrow.amount` atomically — partial funding rejected
+- `release()` and `refund()` blocked when `frozen==1`
+- Merkle root of all session audit events anchored on-chain in transaction Note field
+- Idempotent submission — safe to retry without double-spend
 
 ---
 
-## 📡 API Reference
+## API Reference
 
 All endpoints versioned under `/v1/`. All responses use the standard envelope:
 
@@ -450,7 +450,7 @@ data: {"event":"agreed", "final_price":47800, "session_id":"3f7c4d..."}
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 ### Backend
 | Component | Technology |
@@ -493,7 +493,7 @@ data: {"event":"agreed", "final_price":47800, "session_id":"3f7c4d..."}
 
 ---
 
-## 📊 Codebase Statistics
+## Codebase Statistics
 
 | Layer | Files | Lines of Code |
 |-------|------:|-------------:|
@@ -505,18 +505,21 @@ data: {"event":"agreed", "final_price":47800, "session_id":"3f7c4d..."}
 | Infrastructure | 10 | 905 |
 | **Total** | **362** | **42,803** |
 
-**Bounded contexts**: 10 · **API endpoints**: 60+ · **DB migrations**: 12 · **Test files**: 38
+**Bounded contexts**: 10
+**API endpoints**: 60+
+**DB migrations**: 12
+**Test files**: 38
 
 ---
 
-## 🚀 Quick Start
+## Quick Start (Local Dev)
 
 ### Prerequisites
 
 - Docker + Docker Compose
 - Python 3.12 (for local backend dev)
 - Node.js 20 (for local frontend dev)
-- A Groq API key (free at [console.groq.com](https://console.groq.com))
+- A Groq API key (free at console.groq.com)
 
 ### 1. Clone the repo
 
@@ -563,7 +566,7 @@ docker exec cadencia-backend python scripts/seed_demo_data.py
 
 ---
 
-## ☁️ Deployment
+## Deployment
 
 ### GitHub Actions CI/CD
 
@@ -601,27 +604,27 @@ docker pull ghcr.io/adityawagh19/cadencia-a2a-platform/frontend:latest
 
 ---
 
-## 🔧 Environment Variables
+## Environment Variables
 
 | Variable | Required | Description | Example |
 |----------|----------|-------------|---------|
-| `DATABASE_URL` | ✅ | PostgreSQL async URL | `postgresql+asyncpg://user:pass@host/db` |
-| `REDIS_URL` | ✅ | Redis connection string | `redis://localhost:6379/0` |
-| `JWT_PRIVATE_KEY` | ✅ | RS256 RSA private key (PEM) | Never commit — use env injection |
-| `JWT_PUBLIC_KEY` | ✅ | RS256 RSA public key (PEM) | Paired with private key |
-| `GROQ_API_KEY` | ✅ | LLM provider API key | `gsk_...` |
-| `ALGORAND_NETWORK` | ✅ | Algorand target network | `testnet` \| `mainnet` |
-| `ALGORAND_ALGOD_ADDRESS` | ✅ | Algorand node URL | `https://testnet-api.4160.nodely.dev` |
-| `ALGORAND_ESCROW_CREATOR_MNEMONIC` | ✅ | 25-word mnemonic | Never commit |
-| `CORS_ALLOWED_ORIGINS` | ✅ | Allowed CORS origins | `https://yourdomain.com` |
-| `APP_ENV` | ✅ | Environment | `development` \| `production` |
-| `ESCROW_DRY_RUN_ENABLED` | ✅ | Dry-run all blockchain calls | `true` (always in non-production) |
-| `AUDIT_RETENTION_YEARS` | ✅ | Minimum audit retention | `7` |
-| `DATA_RESIDENCY_REGION` | ✅ | AWS data residency region | `ap-south-1` |
+| `DATABASE_URL` | Required | PostgreSQL async URL | `postgresql+asyncpg://user:pass@host/db` |
+| `REDIS_URL` | Required | Redis connection string | `redis://localhost:6379/0` |
+| `JWT_PRIVATE_KEY` | Required | RS256 RSA private key (PEM) | Never commit — use env injection |
+| `JWT_PUBLIC_KEY` | Required | RS256 RSA public key (PEM) | Paired with private key |
+| `GROQ_API_KEY` | Required | LLM provider API key | `gsk_...` |
+| `ALGORAND_NETWORK` | Required | Algorand target network | `testnet` \| `mainnet` |
+| `ALGORAND_ALGOD_ADDRESS` | Required | Algorand node URL | `https://testnet-api.4160.nodely.dev` |
+| `ALGORAND_ESCROW_CREATOR_MNEMONIC` | Required | 25-word mnemonic | Never commit |
+| `CORS_ALLOWED_ORIGINS` | Required | Allowed CORS origins | `https://yourdomain.com` |
+| `APP_ENV` | Required | Environment | `development` \| `production` |
+| `ESCROW_DRY_RUN_ENABLED` | Required | Dry-run all blockchain calls | `true` (always in non-production) |
+| `AUDIT_RETENTION_YEARS` | Required | Minimum audit retention | `7` |
+| `DATA_RESIDENCY_REGION` | Required | AWS data residency region | `ap-south-1` |
 
 ---
 
-## 🔐 Security
+## Security
 
 | Control | Implementation |
 |---------|---------------|
@@ -640,7 +643,7 @@ docker pull ghcr.io/adityawagh19/cadencia-a2a-platform/frontend:latest
 
 ---
 
-## 🧪 Testing
+## Testing
 
 ### Test Pyramid
 
@@ -682,7 +685,7 @@ pytest tests/e2e/ -v
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 Cadencia-A2A-Platform/
@@ -725,23 +728,23 @@ Cadencia-A2A-Platform/
 
 ---
 
-## 🗺️ Product Roadmap
+## Product Roadmap
 
 | Phase | Status | Deliverable |
 |-------|--------|-------------|
-| Phase 0 — Foundation | ✅ Complete | Docker stack, DB migrations, `/health` |
-| Phase 1 — Identity & Auth | ✅ Complete | JWT, KYC state machine, API keys, rate limiting |
-| Phase 2 — Algorand Escrow | ✅ Complete | Full escrow lifecycle on localnet |
-| Phase 3 — Audit | ✅ Complete | Hash-chained AuditLog, Merkle proof endpoint |
-| Phase 4 — Negotiation Engine | ✅ Complete | LLM agents, NeutralEngine, SSE stream, human override |
-| Phase 5 — Marketplace | ✅ Complete | RFQ upload, NLP, pgvector matching, session handoff |
-| Phase 6 — Compliance | ✅ Complete | FEMA + GST records, PDF/CSV export, treasury dashboard |
-| Phase 7 — Production Hardening | ✅ Complete | Gunicorn + Caddy, Pydantic hardening, Prometheus |
-| **AWS Deployment** | 🔄 In Progress | EC2 launch, GitHub CI/CD, production secrets |
+| Phase 0 — Foundation | Complete | Docker stack, DB migrations, `/health` |
+| Phase 1 — Identity & Auth | Complete | JWT, KYC state machine, API keys, rate limiting |
+| Phase 2 — Algorand Escrow | Complete | Full escrow lifecycle on localnet |
+| Phase 3 — Audit | Complete | Hash-chained AuditLog, Merkle proof endpoint |
+| Phase 4 — Negotiation Engine | Complete | LLM agents, NeutralEngine, SSE stream, human override |
+| Phase 5 — Marketplace | Complete | RFQ upload, NLP, pgvector matching, session handoff |
+| Phase 6 — Compliance | Complete | FEMA + GST records, PDF/CSV export, treasury dashboard |
+| Phase 7 — Production Hardening | Complete | Gunicorn + Caddy, Pydantic hardening, Prometheus |
+| **AWS Deployment** | In Progress | EC2 launch, GitHub CI/CD, production secrets |
 
 ---
 
-## 📚 Documentation
+## Documentation
 
 | Document | Link |
 |----------|------|
@@ -752,7 +755,7 @@ Cadencia-A2A-Platform/
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 1. Fork the repo and create a branch: `git checkout -b feature/your-feature`
 2. Run linting: `ruff check src/` and type checking: `mypy src/`
@@ -761,7 +764,7 @@ Cadencia-A2A-Platform/
 
 ---
 
-## 📄 License
+## License
 
 MIT License — see [LICENSE](LICENSE) for details.
 
