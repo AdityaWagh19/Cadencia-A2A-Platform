@@ -77,8 +77,7 @@ services:
   frontend:
     image: ghcr.io/adityawagh19/cadencia-a2a-platform/frontend:latest
     restart: unless-stopped
-    ports:
-      - "80:3000"
+    # No host ports — Caddy reverse-proxies to frontend:3000
     environment:
       # Server-side proxy rewrites → backend via Docker internal network
       NEXT_INTERNAL_BACKEND_URL: http://backend:8000
@@ -89,3 +88,22 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+
+  # ── Caddy (TLS reverse proxy — auto Let's Encrypt) ────────────────────
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  caddy_data:
+  caddy_config:
