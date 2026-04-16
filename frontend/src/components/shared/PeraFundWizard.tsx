@@ -19,7 +19,7 @@ interface PeraFundWizardProps {
 }
 
 export function PeraFundWizard({ escrowId, onFundComplete, onCancel }: PeraFundWizardProps) {
-  const { isLinked, linkWallet } = useWalletContext();
+  const { isLinked, linkWallet, signAndSubmitFundTxn } = useWalletContext();
   const { isAdmin } = useAuth();
   const [step, setStep] = React.useState<1 | 2 | 3>(1);
   const [successData, setSuccessData] = React.useState<SubmitSignedFundResponse | null>(null);
@@ -33,18 +33,13 @@ export function PeraFundWizard({ escrowId, onFundComplete, onCancel }: PeraFundW
     staleTime: 0,
   });
 
-  // Step 2 & 3: Sign and Submit Mutation (Handled by WalletContext typically, but we simulate flow here as requested)
-  // The guide says: Uses `useWallet` from `WalletContext` for `connectAndLink`, `signAndSubmitFundTxn`.
-  // Wait, signAndSubmitFundTxn takes escrowId. So we just call it.
+  // Step 2 & 3: Sign via Pera Wallet and submit to backend
   const submitFn = async () => {
     if (!isLinked) {
       await linkWallet();
     }
-    // Simulate signAndSubmitFundTxn returning the valid response via API directly since the context might be a stub,
-    // or just rely on Context if it was fully implemented.
-    // Given the prompt: POST /submit-signed-fund with signed base64 txns.
-    const { data } = await api.post(`/v1/escrow/${escrowId}/submit-signed-fund`);
-    return data.data;
+    const result = await signAndSubmitFundTxn(escrowId);
+    return { txid: result.txid, confirmed_round: result.confirmed_round };
   };
 
   const legacySubmitMutation = useMutation({

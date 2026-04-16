@@ -94,9 +94,13 @@ export default function EscrowPage() {
   const handleAction = (type: 'deploy' | 'fund' | 'release' | 'refund' | 'freeze', sessionId: string, escrowId?: string) => {
     if (type === 'fund') {
       if (!escrowId) { toast.error('Escrow not found'); return; }
+      if (!activeAddress) {
+        toast.error('Connect your Pera Wallet first (Settings → Wallet)');
+        return;
+      }
       setIsFunding(true);
-      toast.info('Funding escrow via platform wallet...');
-      api.post(`/v1/escrow/${escrowId}/platform-fund`)
+      toast.info('Sign the fund transactions in your Pera Wallet...');
+      signAndSubmitFundTxn(escrowId)
         .then(() => {
           toast.success('Escrow funded! Proceed to release.');
           queryClient.invalidateQueries({ queryKey: ['escrow', sessionId] });
