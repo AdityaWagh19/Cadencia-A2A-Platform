@@ -22,12 +22,14 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    Integer,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.shared.infrastructure.db.base import Base
@@ -70,6 +72,19 @@ class EnterpriseModel(Base):
     algorand_wallet: Mapped[str | None] = mapped_column(String(58), nullable=True)
     kyc_documents: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     agent_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # Enhanced onboarding fields
+    facility_type: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    payment_terms_accepted: Mapped[list | None] = mapped_column(ARRAY(String), nullable=True)
+    credit_period_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    years_in_operation: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    annual_turnover_inr: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    quality_certifications: Mapped[list | None] = mapped_column(ARRAY(String), nullable=True)
+    test_certificate_available: Mapped[bool | None] = mapped_column(
+        Boolean, server_default="false", nullable=True
+    )
+    third_party_inspection_allowed: Mapped[bool | None] = mapped_column(
+        Boolean, server_default="false", nullable=True
+    )
     created_at: Mapped[str] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

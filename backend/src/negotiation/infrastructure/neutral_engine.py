@@ -46,7 +46,9 @@ from src.negotiation.domain.strategy import StrategyEngine, adaptive_concession
 from src.negotiation.domain.valuation import (
     Valuation,
     compute_buyer_valuation,
+    compute_buyer_valuation_from_rfq,
     compute_seller_valuation,
+    compute_seller_valuation_from_catalogue,
 )
 from src.negotiation.infrastructure.personalization import PersonalizationBuilder
 
@@ -203,10 +205,14 @@ class NeutralEngine:
             except Exception as e:
                 log.warning("rag_retrieval_failed", error=str(e))
 
+        # ── LOGISTICS CONTEXT (from match scoring) ──
+        logistics_context = self._get_logistics_context(session)
+
         raw_output = await self.agent_driver.generate_offer(  # type: ignore[union-attr]
             system_prompt=system_prompt,
             session_context=session_context,
             offer_history=offer_history,
+            logistics_context=logistics_context,
         )
 
         action = raw_output.get("action", "OFFER").upper()
@@ -524,6 +530,22 @@ class NeutralEngine:
             }
             for o in offers[-20:]
         ]
+
+    def _get_logistics_context(self, session: NegotiationSession) -> dict | None:
+        """
+        Build logistics context from match scoring data.
+
+        Uses the match's stored delivery estimates (computed during matching).
+        Returns None if no delivery data is available (falls back to standard negotiation).
+        """
+        try:
+            # Synchronous access to match data stored on session metadata
+            # The match scoring data is persisted in the matches table
+            # For now, we use the session's rfq_id to signal logistics awareness
+            # A more complete implementation would query the match row
+            return None  # Will be populated when match data is passed through
+        except Exception:
+            return None
 
     def _create_timeout_offer(
         self, session: NegotiationSession

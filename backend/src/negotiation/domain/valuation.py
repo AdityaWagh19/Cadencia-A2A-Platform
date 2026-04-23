@@ -187,3 +187,44 @@ def compute_seller_valuation(
         target_price=target,
         walkaway_delta=walkaway_delta,
     )
+
+
+# ── Catalogue-aware convenience functions ────────────────────────────────────
+
+
+def compute_seller_valuation_from_catalogue(
+    catalogue_price: Decimal,
+    bulk_price: Decimal | None = None,
+    margin_floor: Decimal = Decimal("10"),
+    risk_appetite: str = "MEDIUM",
+) -> Valuation:
+    """
+    Compute seller valuation using catalogue pricing.
+
+    Uses the bulk-tier price if available, otherwise the base catalogue price.
+    Delegates to compute_seller_valuation for the actual calculation.
+    """
+    cost_basis = bulk_price if bulk_price else catalogue_price
+    return compute_seller_valuation(
+        cost_basis=cost_basis,
+        margin_floor=margin_floor,
+        risk_appetite=risk_appetite,
+    )
+
+
+def compute_buyer_valuation_from_rfq(
+    budget_min: Decimal,
+    budget_max: Decimal,
+    risk_appetite: str = "MEDIUM",
+) -> Valuation:
+    """
+    Compute buyer valuation from RFQ budget range.
+
+    Uses midpoint as fair price, budget_max as ceiling.
+    """
+    fair_price = (budget_min + budget_max) / Decimal("2")
+    return compute_buyer_valuation(
+        fair_price=fair_price,
+        risk_appetite=risk_appetite,
+        budget_ceiling=budget_max,
+    )

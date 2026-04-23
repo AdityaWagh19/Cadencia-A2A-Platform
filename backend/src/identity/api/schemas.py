@@ -15,6 +15,18 @@ from src.identity.domain.enterprise import Enterprise
 
 # ── Request schemas ───────────────────────────────────────────────────────────
 
+class AddressCreateRequest(BaseModel):
+    """Address for facility (seller) or delivery site (buyer)."""
+    address_type: Literal["FACILITY", "DELIVERY", "REGISTERED_OFFICE", "WAREHOUSE"] = "FACILITY"
+    address_line1: str = Field(min_length=5, max_length=500)
+    address_line2: str | None = Field(None, max_length=500)
+    city: str = Field(min_length=2, max_length=100)
+    state: str = Field(min_length=2, max_length=50)
+    pincode: str = Field(pattern=r"^\d{6}$")
+    latitude: float | None = None
+    longitude: float | None = None
+
+
 class EnterpriseCreateRequest(BaseModel):
     legal_name: str = Field(min_length=2, max_length=255)
     pan: str = Field(pattern=r"^[A-Z]{5}[0-9]{4}[A-Z]{1}$")
@@ -25,6 +37,19 @@ class EnterpriseCreateRequest(BaseModel):
     max_order_value: Decimal | None = Field(None, ge=0)
     industry_vertical: str | None = Field(None, max_length=100)
     geography: str = Field(default="IN", max_length=100)
+    # Enhanced onboarding: address
+    address: Optional[AddressCreateRequest] = None
+    # Enhanced onboarding: business details
+    facility_type: Optional[Literal[
+        "MANUFACTURING_PLANT", "WAREHOUSE", "TRADING_OFFICE", "INTEGRATED"
+    ]] = None
+    payment_terms_accepted: list[str] = Field(default_factory=list)
+    credit_period_days: Optional[int] = Field(None, ge=0, le=180)
+    years_in_operation: Optional[int] = Field(None, ge=0)
+    annual_turnover_inr: Optional[Decimal] = Field(None, ge=0)
+    quality_certifications: list[str] = Field(default_factory=list)
+    test_certificate_available: bool = False
+    third_party_inspection_allowed: bool = False
 
 
 class UserCreateRequest(BaseModel):
@@ -167,6 +192,14 @@ class EnterpriseResponse(BaseModel):
     max_order_value: float
     algorand_wallet: Optional[str] = None
     agent_config: Optional[AgentConfigResponse] = None
+    # Enhanced onboarding fields
+    facility_type: Optional[str] = None
+    payment_terms_accepted: list[str] = Field(default_factory=list)
+    credit_period_days: Optional[int] = None
+    years_in_operation: Optional[int] = None
+    quality_certifications: list[str] = Field(default_factory=list)
+    test_certificate_available: bool = False
+    third_party_inspection_allowed: bool = False
 
     @classmethod
     def from_domain(cls, enterprise: "Enterprise") -> "EnterpriseResponse":
@@ -198,6 +231,13 @@ class EnterpriseResponse(BaseModel):
             min_order_value=float(enterprise.min_order_value) if enterprise.min_order_value else 0,
             max_order_value=float(enterprise.max_order_value) if enterprise.max_order_value else 0,
             agent_config=agent_cfg,
+            facility_type=getattr(enterprise, 'facility_type', None),
+            payment_terms_accepted=getattr(enterprise, 'payment_terms_accepted', []) or [],
+            credit_period_days=getattr(enterprise, 'credit_period_days', None),
+            years_in_operation=getattr(enterprise, 'years_in_operation', None),
+            quality_certifications=getattr(enterprise, 'quality_certifications', []) or [],
+            test_certificate_available=getattr(enterprise, 'test_certificate_available', False) or False,
+            third_party_inspection_allowed=getattr(enterprise, 'third_party_inspection_allowed', False) or False,
         )
 
 

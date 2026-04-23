@@ -54,8 +54,29 @@ class LLMAgentDriver:
         system_prompt: str,
         session_context: dict,
         offer_history: list[dict],
+        logistics_context: dict | None = None,
     ) -> dict:
         start_time = time.monotonic()
+
+        # Inject logistics/delivery context into system prompt if available
+        if logistics_context:
+            logistics_section = (
+                "\n\nLOGISTICS CONTEXT:\n"
+                f"- Distance: {logistics_context.get('distance_km', 'N/A')} km between buyer and seller\n"
+                f"- Transit time: {logistics_context.get('transit_days', 'N/A')} days estimated\n"
+                f"- Manufacturing lead: {logistics_context.get('lead_days', 'N/A')} days\n"
+                f"- Total delivery: {logistics_context.get('total_days', 'N/A')} days\n"
+                f"- Buyer deadline: {logistics_context.get('deadline_days', 'N/A')} days\n"
+                f"- Buffer remaining: {logistics_context.get('buffer_days', 'N/A')} days\n"
+                f"- Urgency: {logistics_context.get('urgency_level', 'LOW')}\n"
+                "\nURGENCY RULES:\n"
+                "- CRITICAL: push for immediate agreement, max 3 rounds\n"
+                "- HIGH: reduce concession rounds, aim for quick convergence\n"
+                "- MODERATE: normal pace with awareness of timeline\n"
+                "- LOW: negotiate freely, maximize value\n"
+            )
+            system_prompt = system_prompt + logistics_section
+
         system_prompt = sanitize_llm_input(system_prompt)
         user_content = json.dumps({
             "session": session_context,
@@ -125,6 +146,7 @@ class StubAgentDriver:
         system_prompt: str,
         session_context: dict,
         offer_history: list[dict],
+        logistics_context: dict | None = None,
     ) -> dict:
         round_num = session_context.get("round_count", 0)
         last_price = offer_history[-1]["price"] if offer_history else 100000.0

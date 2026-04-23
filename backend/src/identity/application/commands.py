@@ -23,6 +23,17 @@ class RegisterEnterpriseCommand:
     max_order_value: Decimal | None
     industry_vertical: str | None
     geography: str = "IN"
+    # Enhanced onboarding: address
+    address: dict | None = None  # Serialized AddressCreateRequest
+    # Enhanced onboarding: business details
+    facility_type: str | None = None
+    payment_terms_accepted: list[str] = field(default_factory=list)
+    credit_period_days: int | None = None
+    years_in_operation: int | None = None
+    annual_turnover_inr: Decimal | None = None
+    quality_certifications: list[str] = field(default_factory=list)
+    test_certificate_available: bool = False
+    third_party_inspection_allowed: bool = False
 
 
 @dataclass(frozen=True)

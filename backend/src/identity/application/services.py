@@ -122,6 +122,22 @@ class IdentityService:
                     "min_order_value must be <= max_order_value.", field="min_order_value"
                 )
 
+        # Enhanced onboarding: business details
+        if cmd.facility_type:
+            enterprise.facility_type = cmd.facility_type
+        if cmd.payment_terms_accepted:
+            enterprise.payment_terms_accepted = list(cmd.payment_terms_accepted)
+        if cmd.credit_period_days is not None:
+            enterprise.credit_period_days = cmd.credit_period_days
+        if cmd.years_in_operation is not None:
+            enterprise.years_in_operation = cmd.years_in_operation
+        if cmd.annual_turnover_inr is not None:
+            enterprise.annual_turnover_inr = cmd.annual_turnover_inr
+        if cmd.quality_certifications:
+            enterprise.quality_certifications = list(cmd.quality_certifications)
+        enterprise.test_certificate_available = cmd.test_certificate_available
+        enterprise.third_party_inspection_allowed = cmd.third_party_inspection_allowed
+
         # Force MEMBER role regardless of what the client sends.
         # ADMIN is reserved for the backdoor admin login only.
         user = User(
@@ -137,6 +153,13 @@ class IdentityService:
             await self._enterprises.save(enterprise)
             await self._users.save(user)
             await self._uow.commit()
+
+        # 3.1 Create address if provided (separate session — non-blocking)
+        if cmd.address:
+            import asyncio
+            asyncio.create_task(
+                self._create_address(enterprise.id, cmd.address)
+            )
 
         # 4. Publish domain event
         event = EnterpriseRegistered(
@@ -170,6 +193,35 @@ class IdentityService:
             "refresh_token": refresh_token,
             "token_type": "bearer",
         }
+
+    async def _create_address(self, enterprise_id, address_data: dict) -> None:
+        """Background: persist address with its own DB session."""
+        import asyncio
+        await asyncio.sleep(0.3)  # Wait for parent transaction commit
+        from src.shared.infrastructure.db.session import get_session_factory
+        from src.marketplace.infrastructure.models import AddressModel
+        factory = get_session_factory()
+        async with factory() as session:
+            try:
+                import uuid
+                addr = AddressModel(
+                    id=uuid.uuid4(),
+                    enterprise_id=enterprise_id,
+                    address_type=address_data.get("address_type", "FACILITY"),
+                    address_line1=address_data["address_line1"],
+                    address_line2=address_data.get("address_line2"),
+                    city=address_data["city"],
+                    state=address_data["state"],
+                    pincode=address_data["pincode"],
+                    latitude=address_data.get("latitude"),
+                    longitude=address_data.get("longitude"),
+                    is_primary=True,
+                )
+                session.add(addr)
+                await session.commit()
+                log.info("address_created", enterprise_id=str(enterprise_id))
+            except Exception:
+                log.exception("address_create_failed", enterprise_id=str(enterprise_id))
 
     # ── Admin Backdoor Login ────────────────────────────────────────────────
 

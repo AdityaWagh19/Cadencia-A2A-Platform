@@ -93,22 +93,34 @@ async def register(
 ) -> ApiResponse[TokenResponse]:
     from decimal import Decimal
 
+    ent = request_body.enterprise
     cmd = RegisterEnterpriseCommand(
-        legal_name=request_body.enterprise.legal_name,
-        pan=request_body.enterprise.pan,
-        gstin=request_body.enterprise.gstin,
-        trade_role=request_body.enterprise.trade_role,
+        legal_name=ent.legal_name,
+        pan=ent.pan,
+        gstin=ent.gstin,
+        trade_role=ent.trade_role,
         email=str(request_body.user.email),
         password=request_body.user.password,
         full_name=request_body.user.full_name,
         role=request_body.user.role,
-        commodities=list(request_body.enterprise.commodities),
-        min_order_value=Decimal(str(request_body.enterprise.min_order_value))
-            if request_body.enterprise.min_order_value is not None else None,
-        max_order_value=Decimal(str(request_body.enterprise.max_order_value))
-            if request_body.enterprise.max_order_value is not None else None,
-        industry_vertical=request_body.enterprise.industry_vertical,
-        geography=request_body.enterprise.geography,
+        commodities=list(ent.commodities),
+        min_order_value=Decimal(str(ent.min_order_value))
+            if ent.min_order_value is not None else None,
+        max_order_value=Decimal(str(ent.max_order_value))
+            if ent.max_order_value is not None else None,
+        industry_vertical=ent.industry_vertical,
+        geography=ent.geography,
+        # Enhanced onboarding fields
+        address=ent.address.model_dump() if ent.address else None,
+        facility_type=ent.facility_type,
+        payment_terms_accepted=list(ent.payment_terms_accepted) if ent.payment_terms_accepted else [],
+        credit_period_days=ent.credit_period_days,
+        years_in_operation=ent.years_in_operation,
+        annual_turnover_inr=Decimal(str(ent.annual_turnover_inr))
+            if ent.annual_turnover_inr is not None else None,
+        quality_certifications=list(ent.quality_certifications) if ent.quality_certifications else [],
+        test_certificate_available=ent.test_certificate_available,
+        third_party_inspection_allowed=ent.third_party_inspection_allowed,
     )
     result = await svc.register_enterprise(cmd)
 

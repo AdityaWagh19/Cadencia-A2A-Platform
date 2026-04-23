@@ -25,6 +25,7 @@ const navItems: NavItem[] = [
   { label: 'Dashboard',       href: ROUTES.DASHBOARD,       icon: LayoutDashboard },
   { label: 'Marketplace',     href: ROUTES.MARKETPLACE,     icon: ShoppingCart,    roles: ['BUYER'] },
   { label: 'Seller Profile',  href: ROUTES.SELLER_PROFILE,  icon: Store,           roles: ['SELLER'] },
+  { label: 'Catalogue',       href: '/marketplace/catalogue', icon: PackageSearch,  roles: ['SELLER'] },
   { label: 'Negotiations',    href: ROUTES.NEGOTIATIONS,    icon: Handshake },
   { label: 'Escrow',          href: ROUTES.ESCROW,          icon: Landmark },
   { label: 'Treasury',        href: ROUTES.TREASURY,        icon: Banknote },

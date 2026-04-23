@@ -152,35 +152,112 @@ class MarketplaceService:
                 embedding = await self._parser.generate_embedding(embed_text)
                 rfq.embedding = embedding
 
-                # 4. Find matches (with keyword fallback)
-                raw_matches = await matchmaker.find_matches(
-                    rfq, embedding, self._top_n
+                # 4. Find matches — use enhanced matching if RFQ has delivery data
+                has_delivery_data = bool(
+                    parsed.get("delivery_window_days")
+                    or parsed.get("quantity")
+                    or parsed.get("budget_min")
                 )
 
-                # Fallback to keyword matching if pgvector returns no/low results
-                if not raw_matches or (raw_matches and all(s < 0.3 for _, s in raw_matches)):
-                    keyword_matchmaker = KeywordMatchmaker(session)
-                    keyword_results = await keyword_matchmaker.find_matches(rfq, embedding, self._top_n)
-                    if keyword_results:
-                        raw_matches = keyword_results
+                # Try to get buyer's delivery pincode from their address
+                buyer_pincode = None
+                buyer_delivery_window = parsed.get("delivery_window_days")
+                buyer_qty = parsed.get("quantity")
+                buyer_budget_min = parsed.get("budget_min")
+                buyer_budget_max = parsed.get("budget_max")
+                product_category = parsed.get("product_category")
+
+                if has_delivery_data and hasattr(matchmaker, 'find_enhanced_matches'):
+                    # Fetch buyer address for pincode
+                    from src.marketplace.infrastructure.models import AddressModel
+                    from sqlalchemy import select as sa_select
+                    addr_result = await session.execute(
+                        sa_select(AddressModel).where(
+                            AddressModel.enterprise_id == rfq.buyer_enterprise_id,
+                            AddressModel.is_primary == True,  # noqa: E712
+                        )
+                    )
+                    buyer_addr = addr_result.scalar_one_or_none()
+                    if buyer_addr:
+                        buyer_pincode = buyer_addr.pincode
+
+                    enhanced_results = await matchmaker.find_enhanced_matches(
+                        rfq=rfq,
+                        rfq_embedding=embedding,
+                        buyer_pincode=buyer_pincode,
+                        buyer_delivery_window=int(buyer_delivery_window) if buyer_delivery_window else None,
+                        buyer_qty=float(buyer_qty) if buyer_qty else None,
+                        buyer_budget_min=float(buyer_budget_min) if buyer_budget_min else None,
+                        buyer_budget_max=float(buyer_budget_max) if buyer_budget_max else None,
+                        product_category=product_category,
+                        top_n=self._top_n,
+                    )
+
+                    if enhanced_results:
+                        matches = [
+                            Match(
+                                rfq_id=rfq.id,
+                                seller_enterprise_id=m["enterprise_id"],
+                                similarity_score=SimilarityScore(value=m["composite_score"]),
+                                rank=m["rank"],
+                            )
+                            for m in enhanced_results
+                        ]
+                        await match_repo.save_bulk(matches)
+
+                        # Store scoring breakdown in match rows
+                        for m_data in enhanced_results:
+                            from src.marketplace.infrastructure.models import MatchModel
+                            match_row = await session.execute(
+                                sa_select(MatchModel).where(
+                                    MatchModel.rfq_id == rfq.id,
+                                    MatchModel.seller_enterprise_id == m_data["enterprise_id"],
+                                )
+                            )
+                            row = match_row.scalar_one_or_none()
+                            if row:
+                                row.semantic_score = m_data.get("semantic_score")
+                                row.delivery_feasibility_score = m_data.get("delivery_feasibility_score")
+                                row.capacity_score = m_data.get("capacity_score")
+                                row.price_score = m_data.get("price_score")
+                                row.proximity_score = m_data.get("proximity_score")
+                                row.composite_score = m_data.get("composite_score")
+                                row.estimated_delivery_days = m_data.get("estimated_delivery_days")
+                                row.distance_km = m_data.get("distance_km")
+
+                        raw_matches = [(m["enterprise_id"], m["composite_score"]) for m in enhanced_results]
+                    else:
+                        raw_matches = []
+                else:
+                    # Fallback: standard pgvector matching
+                    raw_matches = await matchmaker.find_matches(
+                        rfq, embedding, self._top_n
+                    )
+
+                    # Fallback to keyword matching if pgvector returns no/low results
+                    if not raw_matches or (raw_matches and all(s < 0.3 for _, s in raw_matches)):
+                        keyword_matchmaker = KeywordMatchmaker(session)
+                        keyword_results = await keyword_matchmaker.find_matches(rfq, embedding, self._top_n)
+                        if keyword_results:
+                            raw_matches = keyword_results
+
+                    if raw_matches:
+                        matches = [
+                            Match(
+                                rfq_id=rfq.id,
+                                seller_enterprise_id=ent_id,
+                                similarity_score=SimilarityScore(value=score),
+                                rank=rank + 1,
+                            )
+                            for rank, (ent_id, score) in enumerate(raw_matches)
+                        ]
+                        await match_repo.save_bulk(matches)
 
                 if not raw_matches:
                     log.info("rfq_no_matches", rfq_id=str(rfq_id))
                     await rfq_repo.update(rfq)
                     await session.commit()
                     return  # Stay PARSED
-
-                # 5. Create Match entities
-                matches = [
-                    Match(
-                        rfq_id=rfq.id,
-                        seller_enterprise_id=ent_id,
-                        similarity_score=SimilarityScore(value=score),
-                        rank=rank + 1,
-                    )
-                    for rank, (ent_id, score) in enumerate(raw_matches)
-                ]
-                await match_repo.save_bulk(matches)
 
                 # 6. Mark matched
                 rfq_matched_data = rfq.mark_matched(len(matches))

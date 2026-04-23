@@ -11,18 +11,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.identity.api.dependencies import get_current_user, get_current_buyer, get_current_seller
 from src.identity.domain.user import User
+from sqlalchemy import select
+
 from src.marketplace.api.schemas import (
+    AddressResponse,
     CapabilityProfileResponse,
     CapabilityProfileUpdateRequest,
     CapabilityProfileUpdateResponse,
+    CatalogueItemCreateRequest,
+    CatalogueItemResponse,
+    CatalogueItemUpdateRequest,
     ConfirmRFQRequest,
     ConfirmRFQResponse,
     EmbeddingRecomputeResponse,
+    EnhancedMatchResponse,
     IncomingRFQResponse,
     MatchResponse,
+    PincodeGeocodeResponse,
     RFQResponse,
     RFQSubmitResponse,
+    SellerCapacityProfileRequest,
+    SellerCapacityProfileResponse,
     UploadRFQRequest,
+)
+from src.marketplace.infrastructure.models import (
+    AddressModel,
+    CatalogueItemModel,
+    PincodeGeocodeModel,
+    SellerCapacityProfileModel,
 )
 from src.marketplace.application.commands import (
     ConfirmRFQCommand,
@@ -393,5 +409,337 @@ async def recompute_embeddings(
     return success_response(
         EmbeddingRecomputeResponse(
             message="Embeddings recomputation queued. Profile will be active for matching in ~30 seconds."
+        )
+    )
+
+
+# ── Enhanced Onboarding Endpoints ────────────────────────────────────────────
+
+
+def _catalogue_to_response(item: CatalogueItemModel) -> CatalogueItemResponse:
+    return CatalogueItemResponse(
+        id=item.id,
+        product_name=item.product_name,
+        hsn_code=item.hsn_code,
+        product_category=item.product_category,
+        grade=item.grade,
+        specification_text=item.specification_text,
+        unit=item.unit,
+        price_per_unit_inr=float(item.price_per_unit_inr),
+        bulk_pricing_tiers=item.bulk_pricing_tiers,
+        moq=float(item.moq),
+        max_order_qty=float(item.max_order_qty),
+        lead_time_days=item.lead_time_days,
+        in_stock_qty=float(item.in_stock_qty) if item.in_stock_qty else 0,
+        is_active=item.is_active,
+        certifications=item.certifications or [],
+        created_at=item.created_at,
+        updated_at=item.updated_at,
+    )
+
+
+# ── POST /v1/marketplace/catalogue ──────────────────────────────────────────
+
+
+@router.post(
+    "/catalogue",
+    status_code=status.HTTP_201_CREATED,
+    response_model=ApiResponse[CatalogueItemResponse],
+    summary="Add a product to the seller catalogue",
+)
+async def create_catalogue_item(
+    body: CatalogueItemCreateRequest,
+    current_user: User = Depends(get_current_seller),
+    session: AsyncSession = Depends(get_db_session),
+):
+    import uuid as _uuid
+
+    item = CatalogueItemModel(
+        id=_uuid.uuid4(),
+        enterprise_id=current_user.enterprise_id,
+        product_name=body.product_name,
+        hsn_code=body.hsn_code,
+        product_category=body.product_category,
+        grade=body.grade,
+        specification_text=body.specification_text,
+        unit=body.unit,
+        price_per_unit_inr=body.price_per_unit_inr,
+        bulk_pricing_tiers=body.bulk_pricing_tiers,
+        moq=body.moq,
+        max_order_qty=body.max_order_qty,
+        lead_time_days=body.lead_time_days,
+        in_stock_qty=body.in_stock_qty,
+        certifications=body.certifications or [],
+    )
+    session.add(item)
+    await session.commit()
+    await session.refresh(item)
+    return success_response(_catalogue_to_response(item))
+
+
+# ── GET /v1/marketplace/catalogue ───────────────────────────────────────────
+
+
+@router.get(
+    "/catalogue",
+    response_model=ApiResponse[list[CatalogueItemResponse]],
+    summary="List seller's catalogue items",
+)
+async def list_catalogue_items(
+    active_only: bool = Query(default=True),
+    current_user: User = Depends(get_current_seller),
+    session: AsyncSession = Depends(get_db_session),
+):
+    stmt = select(CatalogueItemModel).where(
+        CatalogueItemModel.enterprise_id == current_user.enterprise_id,
+    )
+    if active_only:
+        stmt = stmt.where(CatalogueItemModel.is_active == True)  # noqa: E712
+    stmt = stmt.order_by(CatalogueItemModel.product_name)
+    result = await session.execute(stmt)
+    items = result.scalars().all()
+    return success_response([_catalogue_to_response(i) for i in items])
+
+
+# ── GET /v1/marketplace/catalogue/{item_id} ─────────────────────────────────
+
+
+@router.get(
+    "/catalogue/{item_id}",
+    response_model=ApiResponse[CatalogueItemResponse],
+    summary="Get single catalogue item",
+)
+async def get_catalogue_item(
+    item_id: uuid.UUID,
+    current_user: User = Depends(get_current_seller),
+    session: AsyncSession = Depends(get_db_session),
+):
+    stmt = select(CatalogueItemModel).where(
+        CatalogueItemModel.id == item_id,
+        CatalogueItemModel.enterprise_id == current_user.enterprise_id,
+    )
+    result = await session.execute(stmt)
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Catalogue item not found")
+    return success_response(_catalogue_to_response(item))
+
+
+# ── PUT /v1/marketplace/catalogue/{item_id} ─────────────────────────────────
+
+
+@router.put(
+    "/catalogue/{item_id}",
+    response_model=ApiResponse[CatalogueItemResponse],
+    summary="Update a catalogue item",
+)
+async def update_catalogue_item(
+    item_id: uuid.UUID,
+    body: CatalogueItemUpdateRequest,
+    current_user: User = Depends(get_current_seller),
+    session: AsyncSession = Depends(get_db_session),
+):
+    stmt = select(CatalogueItemModel).where(
+        CatalogueItemModel.id == item_id,
+        CatalogueItemModel.enterprise_id == current_user.enterprise_id,
+    )
+    result = await session.execute(stmt)
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Catalogue item not found")
+
+    update_data = body.model_dump(exclude_unset=True)
+    for field_name, value in update_data.items():
+        setattr(item, field_name, value)
+
+    await session.commit()
+    await session.refresh(item)
+    return success_response(_catalogue_to_response(item))
+
+
+# ── DELETE /v1/marketplace/catalogue/{item_id} ──────────────────────────────
+
+
+@router.delete(
+    "/catalogue/{item_id}",
+    response_model=ApiResponse[dict],
+    summary="Deactivate a catalogue item (soft delete)",
+)
+async def deactivate_catalogue_item(
+    item_id: uuid.UUID,
+    current_user: User = Depends(get_current_seller),
+    session: AsyncSession = Depends(get_db_session),
+):
+    stmt = select(CatalogueItemModel).where(
+        CatalogueItemModel.id == item_id,
+        CatalogueItemModel.enterprise_id == current_user.enterprise_id,
+    )
+    result = await session.execute(stmt)
+    item = result.scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Catalogue item not found")
+
+    item.is_active = False
+    await session.commit()
+    return success_response({"message": "Catalogue item deactivated"})
+
+
+# ── PUT /v1/marketplace/capacity-profile ────────────────────────────────────
+
+
+@router.put(
+    "/capacity-profile",
+    response_model=ApiResponse[SellerCapacityProfileResponse],
+    summary="Create or update seller capacity profile",
+)
+async def upsert_capacity_profile(
+    body: SellerCapacityProfileRequest,
+    current_user: User = Depends(get_current_seller),
+    session: AsyncSession = Depends(get_db_session),
+):
+    import uuid as _uuid
+
+    stmt = select(SellerCapacityProfileModel).where(
+        SellerCapacityProfileModel.enterprise_id == current_user.enterprise_id,
+    )
+    result = await session.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    available = body.monthly_production_capacity_mt * (1 - body.current_utilization_pct / 100)
+
+    if profile:
+        for field_name, value in body.model_dump().items():
+            setattr(profile, field_name, value)
+        profile.available_capacity_mt = available
+    else:
+        profile = SellerCapacityProfileModel(
+            id=_uuid.uuid4(),
+            enterprise_id=current_user.enterprise_id,
+            available_capacity_mt=available,
+            **body.model_dump(),
+        )
+        session.add(profile)
+
+    await session.commit()
+    await session.refresh(profile)
+    return success_response(
+        SellerCapacityProfileResponse(
+            id=profile.id,
+            enterprise_id=profile.enterprise_id,
+            monthly_production_capacity_mt=float(profile.monthly_production_capacity_mt),
+            current_utilization_pct=profile.current_utilization_pct or 0,
+            available_capacity_mt=float(profile.available_capacity_mt) if profile.available_capacity_mt else None,
+            num_production_lines=profile.num_production_lines or 1,
+            shift_pattern=profile.shift_pattern,
+            avg_dispatch_days=profile.avg_dispatch_days,
+            max_delivery_radius_km=profile.max_delivery_radius_km,
+            has_own_transport=profile.has_own_transport,
+            preferred_transport_modes=profile.preferred_transport_modes or [],
+            ex_works_available=profile.ex_works_available,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+        )
+    )
+
+
+# ── GET /v1/marketplace/capacity-profile ────────────────────────────────────
+
+
+@router.get(
+    "/capacity-profile",
+    response_model=ApiResponse[SellerCapacityProfileResponse],
+    summary="Get seller capacity profile",
+)
+async def get_capacity_profile(
+    current_user: User = Depends(get_current_seller),
+    session: AsyncSession = Depends(get_db_session),
+):
+    stmt = select(SellerCapacityProfileModel).where(
+        SellerCapacityProfileModel.enterprise_id == current_user.enterprise_id,
+    )
+    result = await session.execute(stmt)
+    profile = result.scalar_one_or_none()
+
+    if not profile:
+        raise HTTPException(status_code=404, detail="No capacity profile found. Create one first.")
+
+    return success_response(
+        SellerCapacityProfileResponse(
+            id=profile.id,
+            enterprise_id=profile.enterprise_id,
+            monthly_production_capacity_mt=float(profile.monthly_production_capacity_mt),
+            current_utilization_pct=profile.current_utilization_pct or 0,
+            available_capacity_mt=float(profile.available_capacity_mt) if profile.available_capacity_mt else None,
+            num_production_lines=profile.num_production_lines or 1,
+            shift_pattern=profile.shift_pattern,
+            avg_dispatch_days=profile.avg_dispatch_days,
+            max_delivery_radius_km=profile.max_delivery_radius_km,
+            has_own_transport=profile.has_own_transport,
+            preferred_transport_modes=profile.preferred_transport_modes or [],
+            ex_works_available=profile.ex_works_available,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+        )
+    )
+
+
+# ── GET /v1/marketplace/addresses ───────────────────────────────────────────
+
+
+@router.get(
+    "/addresses",
+    response_model=ApiResponse[list[AddressResponse]],
+    summary="List addresses for current enterprise",
+)
+async def list_addresses(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+):
+    stmt = select(AddressModel).where(
+        AddressModel.enterprise_id == current_user.enterprise_id,
+    ).order_by(AddressModel.is_primary.desc())
+    result = await session.execute(stmt)
+    addresses = result.scalars().all()
+    return success_response([
+        AddressResponse(
+            id=a.id,
+            address_type=a.address_type,
+            address_line1=a.address_line1,
+            address_line2=a.address_line2,
+            city=a.city,
+            state=a.state,
+            pincode=a.pincode,
+            latitude=a.latitude,
+            longitude=a.longitude,
+            is_primary=a.is_primary,
+        )
+        for a in addresses
+    ])
+
+
+# ── GET /v1/marketplace/pincode/{pincode} ───────────────────────────────────
+
+
+@router.get(
+    "/pincode/{pincode}",
+    response_model=ApiResponse[PincodeGeocodeResponse],
+    summary="Lookup pincode geocode (public)",
+)
+async def lookup_pincode(
+    pincode: str,
+    session: AsyncSession = Depends(get_db_session),
+):
+    stmt = select(PincodeGeocodeModel).where(PincodeGeocodeModel.pincode == pincode)
+    result = await session.execute(stmt)
+    row = result.scalar_one_or_none()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"Pincode {pincode} not found")
+    return success_response(
+        PincodeGeocodeResponse(
+            pincode=row.pincode,
+            city=row.city,
+            state=row.state,
+            latitude=row.latitude,
+            longitude=row.longitude,
         )
     )

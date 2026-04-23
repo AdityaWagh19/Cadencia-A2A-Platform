@@ -19,6 +19,7 @@ const PAGE_TITLES: Record<string, string> = {
   '/settings/wallet': 'Wallet Management',
   '/marketplace': 'Marketplace',
   '/marketplace/profile': 'Seller Profile',
+  '/marketplace/catalogue': 'Product Catalogue',
   '/negotiations': 'Negotiations',
   '/escrow': 'Escrow & Settlements',
   '/compliance': 'Compliance & Audit',

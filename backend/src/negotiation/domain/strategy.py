@@ -433,3 +433,26 @@ def adaptive_concession(
     )
     # Cap at [0, 0.30]
     return max(Decimal("0"), min(adjusted, Decimal("0.30")))
+
+
+# ── Urgency-Aware Round Limits ───────────────────────────────────────────────
+
+
+_URGENCY_MAX_ROUNDS = {
+    "CRITICAL": 3,
+    "HIGH": 5,
+    "MODERATE": 8,
+    "LOW": 15,
+}
+
+
+def get_max_rounds_for_urgency(urgency_level: str) -> int:
+    """
+    Return max negotiation rounds based on delivery urgency.
+
+    CRITICAL (<2 days buffer): 3 rounds — push for immediate agreement
+    HIGH (2-5 days buffer): 5 rounds — quick convergence
+    MODERATE (5-10 days buffer): 8 rounds — normal with timeline awareness
+    LOW (>10 days buffer): 15 rounds — negotiate freely
+    """
+    return _URGENCY_MAX_ROUNDS.get(urgency_level.upper(), 15)
