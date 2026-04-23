@@ -77,7 +77,7 @@ export default function CataloguePage() {
           <div className="flex items-center justify-between">
             <SectionHeader
               title="Product Catalogue"
-              subtitle="Manage your product listings, pricing tiers, and lead times."
+              description="Manage your product listings, pricing tiers, and lead times."
             />
             <Button onClick={() => { setEditingId(null); setShowForm(true); }} className="bg-primary text-primary-foreground">
               <Plus className="h-4 w-4 mr-1.5" /> Add Product
@@ -199,28 +199,30 @@ function CatalogueForm({
   });
 
   // Load existing item for edit
-  const { isLoading: loadingItem } = useQuery({
+  const { data: editItemData, isLoading: loadingItem } = useQuery({
     queryKey: ['catalogue-item', editingId],
     queryFn: () => api.get(`/v1/marketplace/catalogue/${editingId}`).then(r => r.data.data),
     enabled: !!editingId,
-    onSuccess: (d: any) => {
-      if (d) {
-        setForm({
-          product_name: d.product_name || '',
-          hsn_code: d.hsn_code || '',
-          product_category: d.product_category || 'CUSTOM',
-          grade: d.grade || '',
-          unit: d.unit || 'MT',
-          price_per_unit_inr: String(d.price_per_unit_inr || ''),
-          moq: String(d.moq || ''),
-          max_order_qty: String(d.max_order_qty || ''),
-          lead_time_days: String(d.lead_time_days || ''),
-          in_stock_qty: String(d.in_stock_qty || '0'),
-          certifications: d.certifications || [],
-        });
-      }
-    },
   });
+
+  React.useEffect(() => {
+    if (editItemData) {
+      const d = editItemData as any;
+      setForm({
+        product_name: d.product_name || '',
+        hsn_code: d.hsn_code || '',
+        product_category: d.product_category || 'CUSTOM',
+        grade: d.grade || '',
+        unit: d.unit || 'MT',
+        price_per_unit_inr: String(d.price_per_unit_inr || ''),
+        moq: String(d.moq || ''),
+        max_order_qty: String(d.max_order_qty || ''),
+        lead_time_days: String(d.lead_time_days || ''),
+        in_stock_qty: String(d.in_stock_qty || '0'),
+        certifications: d.certifications || [],
+      });
+    }
+  }, [editItemData]);
 
   const saveMutation = useMutation({
     mutationFn: (body: Record<string, any>) => {

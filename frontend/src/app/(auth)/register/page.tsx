@@ -3,7 +3,7 @@
 import * as React from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import * as z from 'zod';
-import { useForm, Controller } from 'react-hook-form';
+import { useForm, Controller, Resolver } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { AlertCircle, Loader2, X, Pencil, Check } from 'lucide-react';
 import { toast } from 'sonner';
@@ -573,7 +573,7 @@ function SellerFacilityForm({ initialData, onSubmit, onBack }: { initialData: Se
 
 function SellerCapacityForm({ initialData, onSubmit, onBack }: { initialData: SellerCapacityValues | null; onSubmit: (data: SellerCapacityValues) => void; onBack: () => void }) {
   const { register, control, handleSubmit, watch, setValue, formState: { errors } } = useForm<SellerCapacityValues>({
-    resolver: zodResolver(sellerCapacitySchema),
+    resolver: zodResolver(sellerCapacitySchema) as Resolver<SellerCapacityValues>,
     defaultValues: initialData || { shift_pattern: 'SINGLE_SHIFT', avg_dispatch_days: 3, has_own_transport: false, preferred_transport_modes: [], payment_terms_accepted: [], quality_certifications: [] },
     mode: 'onTouched',
   });
@@ -668,7 +668,7 @@ function SellerCapacityForm({ initialData, onSubmit, onBack }: { initialData: Se
 
 function BuyerLocationForm({ initialData, onSubmit, onBack }: { initialData: BuyerLocationValues | null; onSubmit: (data: BuyerLocationValues) => void; onBack: () => void }) {
   const { register, control, handleSubmit, formState: { errors, touchedFields } } = useForm<BuyerLocationValues>({
-    resolver: zodResolver(buyerLocationSchema),
+    resolver: zodResolver(buyerLocationSchema) as Resolver<BuyerLocationValues>,
     defaultValues: initialData || { site_type: 'FACTORY' },
     mode: 'onTouched',
   });
