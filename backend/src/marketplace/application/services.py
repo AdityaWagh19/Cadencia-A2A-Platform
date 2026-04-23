@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from src.marketplace.application.commands import (
     ConfirmRFQCommand,
+    StartNegotiationsCommand,
     UpdateCapabilityProfileCommand,
     UploadRFQCommand,
 )
@@ -162,7 +163,17 @@ class MarketplaceService:
                 # Try to get buyer's delivery pincode from their address
                 buyer_pincode = None
                 buyer_delivery_window = parsed.get("delivery_window_days")
-                buyer_qty = parsed.get("quantity")
+                # Parse quantity — may be "100 MT" or "100" or 100
+                buyer_qty_raw = parsed.get("quantity")
+                buyer_qty = None
+                if buyer_qty_raw is not None:
+                    import re as _re
+                    qty_match = _re.search(r'[\d.]+', str(buyer_qty_raw))
+                    if qty_match:
+                        try:
+                            buyer_qty = float(qty_match.group())
+                        except ValueError:
+                            buyer_qty = None
                 buyer_budget_min = parsed.get("budget_min")
                 buyer_budget_max = parsed.get("budget_max")
                 product_category = parsed.get("product_category")
@@ -252,6 +263,64 @@ class MarketplaceService:
                             for rank, (ent_id, score) in enumerate(raw_matches)
                         ]
                         await match_repo.save_bulk(matches)
+
+                # Fallback: if no matches found, try direct enterprise commodity matching
+                if not raw_matches:
+                    log.info("rfq_trying_enterprise_fallback", rfq_id=str(rfq_id))
+                    try:
+                        from src.identity.infrastructure.models import EnterpriseModel
+                        from sqlalchemy import select as sa_select, or_
+                        parsed_product = (rfq.parsed_fields or {}).get("product_name", "")
+                        parsed_category = (rfq.parsed_fields or {}).get("product_category", "")
+                        search_terms = [t.lower() for t in [parsed_product, parsed_category] if t]
+
+                        ent_stmt = sa_select(EnterpriseModel).where(
+                            EnterpriseModel.id != rfq.buyer_enterprise_id,
+                            or_(
+                                EnterpriseModel.trade_role == "SELLER",
+                                EnterpriseModel.trade_role == "BOTH",
+                            ),
+                        )
+                        ent_result = await session.execute(ent_stmt)
+                        seller_ents = ent_result.scalars().all()
+
+                        fallback_matches = []
+                        for ent in seller_ents:
+                            kyc = ent.kyc_documents or {}
+                            ent_commodities = [c.lower() for c in kyc.get("commodities", [])]
+                            ent_industry = (kyc.get("industry_vertical") or "").lower()
+
+                            # Check if any search term overlaps
+                            match_score = 0.0
+                            for term in search_terms:
+                                if any(term in c or c in term for c in ent_commodities):
+                                    match_score += 0.5
+                                if term in ent_industry or ent_industry in term:
+                                    match_score += 0.3
+                            if not search_terms and ent_commodities:
+                                # No specific product in RFQ - give base score to all sellers
+                                match_score = 0.3
+
+                            if match_score > 0:
+                                fallback_matches.append((ent.id, round(min(match_score, 1.0), 3)))
+
+                        fallback_matches.sort(key=lambda x: x[1], reverse=True)
+                        raw_matches = fallback_matches[:self._top_n]
+
+                        if raw_matches:
+                            matches = [
+                                Match(
+                                    rfq_id=rfq.id,
+                                    seller_enterprise_id=ent_id,
+                                    similarity_score=SimilarityScore(value=score),
+                                    rank=rank + 1,
+                                )
+                                for rank, (ent_id, score) in enumerate(raw_matches)
+                            ]
+                            await match_repo.save_bulk(matches)
+                            log.info("rfq_enterprise_fallback_matched", rfq_id=str(rfq_id), count=len(raw_matches))
+                    except Exception:
+                        log.exception("rfq_enterprise_fallback_failed", rfq_id=str(rfq_id))
 
                 if not raw_matches:
                     log.info("rfq_no_matches", rfq_id=str(rfq_id))
@@ -353,6 +422,64 @@ class MarketplaceService:
         return {
             "message": "Negotiation session created",
             "session_id": str(session_id),
+        }
+
+    async def start_all_negotiations(self, cmd: StartNegotiationsCommand) -> dict:
+        """Start negotiations with ALL matched sellers simultaneously.
+        Transitions RFQ from MATCHED → NEGOTIATING, creates sessions for each match."""
+        rfq = await self._rfq_repo.get_by_id(cmd.rfq_id)
+        if rfq is None:
+            raise NotFoundError("RFQ", cmd.rfq_id)
+
+        if rfq.buyer_enterprise_id != cmd.buyer_enterprise_id:
+            raise AuthorizationError("Only the buyer can start negotiations.")
+
+        # Get all pending matches
+        all_matches = await self._match_repo.list_by_rfq(rfq.id)
+        pending_matches = [m for m in all_matches if m.status.value == "PENDING"]
+
+        if not pending_matches:
+            raise NotFoundError("Matches", f"No pending matches for RFQ {cmd.rfq_id}")
+
+        # Transition RFQ to NEGOTIATING
+        rfq.start_negotiations(len(pending_matches))
+        await self._rfq_repo.update(rfq)
+
+        # Create negotiation sessions for ALL matches
+        session_ids = []
+        for match in pending_matches:
+            try:
+                session_id = await self._create_negotiation_session_sync(
+                    match_id=match.id,
+                    rfq_id=rfq.id,
+                    buyer_enterprise_id=rfq.buyer_enterprise_id,
+                    seller_enterprise_id=match.seller_enterprise_id,
+                )
+                session_ids.append(str(session_id))
+                log.info(
+                    "negotiation_session_started",
+                    rfq_id=str(rfq.id),
+                    match_id=str(match.id),
+                    session_id=str(session_id),
+                    seller_id=str(match.seller_enterprise_id),
+                )
+            except Exception:
+                log.exception(
+                    "negotiation_session_start_failed",
+                    rfq_id=str(rfq.id),
+                    match_id=str(match.id),
+                )
+
+        log.info(
+            "all_negotiations_started",
+            rfq_id=str(rfq.id),
+            session_count=len(session_ids),
+            match_count=len(pending_matches),
+        )
+        return {
+            "message": f"Started {len(session_ids)} negotiation sessions",
+            "session_ids": session_ids,
+            "rfq_status": "NEGOTIATING",
         }
 
     async def _create_negotiation_session_sync(

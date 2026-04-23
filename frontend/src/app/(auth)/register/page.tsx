@@ -67,12 +67,25 @@ const step1Schema = z.object({
   trade_role: z.enum(['BUYER', 'SELLER', 'BOTH'], { error: 'Select a trade role' }),
   industry_vertical: z.string().min(2, 'Industry is required'),
   geography: z.string().min(2, 'Geography is required'),
-  commodities: z.array(z.string()).min(1, 'Add at least one commodity'),
-  min_order_value: z.number({ error: 'Enter a valid amount' }).min(1000, 'Minimum order must be at least ₹1,000'),
-  max_order_value: z.number({ error: 'Enter a valid amount' }),
-}).refine(d => d.max_order_value > d.min_order_value, {
-  message: 'Max order value must be greater than min order value',
-  path: ['max_order_value'],
+  commodities: z.array(z.string()).default([]),
+  min_order_value: z.number({ error: 'Enter a valid amount' }).optional(),
+  max_order_value: z.number({ error: 'Enter a valid amount' }).optional(),
+}).superRefine((d, ctx) => {
+  const isSeller = d.trade_role === 'SELLER' || d.trade_role === 'BOTH';
+  if (isSeller) {
+    if (!d.commodities || d.commodities.length < 1) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Add at least one commodity', path: ['commodities'] });
+    }
+    if (d.min_order_value === undefined || d.min_order_value < 1000) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Minimum order must be at least ₹1,000', path: ['min_order_value'] });
+    }
+    if (d.max_order_value === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Enter a valid amount', path: ['max_order_value'] });
+    }
+    if (d.min_order_value !== undefined && d.max_order_value !== undefined && d.max_order_value <= d.min_order_value) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Max order value must be greater than min order value', path: ['max_order_value'] });
+    }
+  }
 });
 
 const addressSchema = z.object({
@@ -419,12 +432,14 @@ function TagInput({
 
 function Step1Form({ initialData, onSubmit, defaultTradeRole }: { initialData: Step1Values | null; onSubmit: (data: Step1Values) => void; defaultTradeRole?: 'BUYER' | 'SELLER' }) {
   const { register, control, handleSubmit, formState: { errors, touchedFields }, setValue, watch } = useForm<Step1Values>({
-    resolver: zodResolver(step1Schema),
+    resolver: zodResolver(step1Schema) as Resolver<Step1Values>,
     defaultValues: initialData || { commodities: [], trade_role: defaultTradeRole },
     mode: 'onTouched',
   });
 
   const commodities = watch('commodities') || [];
+  const tradeRole = watch('trade_role');
+  const showSellerFields = tradeRole === 'SELLER' || tradeRole === 'BOTH';
 
   return (
     <form onSubmit={handleSubmit(onSubmit)} className="space-y-5 animate-in fade-in slide-in-from-bottom-2">
@@ -467,24 +482,28 @@ function Step1Form({ initialData, onSubmit, defaultTradeRole }: { initialData: S
         <Input {...register('geography')} />
       </FormField>
 
-      <FormField label="Commodities" required error={errors.commodities?.message}>
-        <TagInput value={commodities} onChange={v => setValue('commodities', v, { shouldValidate: true, shouldDirty: true })} />
-      </FormField>
+      {showSellerFields && (
+        <>
+          <FormField label="Commodities" required error={errors.commodities?.message}>
+            <TagInput value={commodities} onChange={v => setValue('commodities', v, { shouldValidate: true, shouldDirty: true })} />
+          </FormField>
 
-      <div className="grid grid-cols-2 gap-4">
-        <FormField label="Min Order Value" required error={errors.min_order_value?.message}>
-          <div className="relative">
-            <span className="absolute left-3 top-2.5 text-sm font-medium text-muted-foreground">INR</span>
-            <Input type="number" className="pl-12" {...register('min_order_value', { valueAsNumber: true })} />
+          <div className="grid grid-cols-2 gap-4">
+            <FormField label="Min Order Value" required error={errors.min_order_value?.message}>
+              <div className="relative">
+                <span className="absolute left-3 top-2.5 text-sm font-medium text-muted-foreground">INR</span>
+                <Input type="number" className="pl-12" {...register('min_order_value', { valueAsNumber: true })} />
+              </div>
+            </FormField>
+            <FormField label="Max Order Value" required error={errors.max_order_value?.message}>
+              <div className="relative">
+                <span className="absolute left-3 top-2.5 text-sm font-medium text-muted-foreground">INR</span>
+                <Input type="number" className="pl-12" {...register('max_order_value', { valueAsNumber: true })} />
+              </div>
+            </FormField>
           </div>
-        </FormField>
-        <FormField label="Max Order Value" required error={errors.max_order_value?.message}>
-          <div className="relative">
-            <span className="absolute left-3 top-2.5 text-sm font-medium text-muted-foreground">INR</span>
-            <Input type="number" className="pl-12" {...register('max_order_value', { valueAsNumber: true })} />
-          </div>
-        </FormField>
-      </div>
+        </>
+      )}
 
       <div className="pt-2">
         <Button type="submit" className="w-full bg-primary text-primary-foreground hover:bg-primary/90">Next</Button>
@@ -820,14 +839,18 @@ function ReviewStep({
           <div><p className="text-xs uppercase tracking-wide text-muted-foreground">GSTIN</p><p className="text-foreground uppercase">{enterprise.gstin}</p></div>
           <div><p className="text-xs uppercase tracking-wide text-muted-foreground">Industry</p><p className="text-foreground">{enterprise.industry_vertical}</p></div>
           <div><p className="text-xs uppercase tracking-wide text-muted-foreground">Geography</p><p className="text-foreground">{enterprise.geography}</p></div>
-          <div className="col-span-2 flex gap-4">
-            <div><p className="text-xs uppercase tracking-wide text-muted-foreground mb-0.5">Min Order</p><p className="text-foreground">{formatCurrency(enterprise.min_order_value)}</p></div>
-            <div><p className="text-xs uppercase tracking-wide text-muted-foreground mb-0.5">Max Order</p><p className="text-foreground">{formatCurrency(enterprise.max_order_value)}</p></div>
-          </div>
-          <div className="col-span-2">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Commodities</p>
-            <div className="flex flex-wrap gap-1.5">{enterprise.commodities.map(c => <span key={c} className="bg-secondary text-secondary-foreground text-xs px-2 py-0.5 rounded-md">{c}</span>)}</div>
-          </div>
+          {(enterprise.trade_role === 'SELLER' || enterprise.trade_role === 'BOTH') && enterprise.min_order_value && enterprise.max_order_value && (
+            <div className="col-span-2 flex gap-4">
+              <div><p className="text-xs uppercase tracking-wide text-muted-foreground mb-0.5">Min Order</p><p className="text-foreground">{formatCurrency(enterprise.min_order_value)}</p></div>
+              <div><p className="text-xs uppercase tracking-wide text-muted-foreground mb-0.5">Max Order</p><p className="text-foreground">{formatCurrency(enterprise.max_order_value)}</p></div>
+            </div>
+          )}
+          {(enterprise.trade_role === 'SELLER' || enterprise.trade_role === 'BOTH') && enterprise.commodities.length > 0 && (
+            <div className="col-span-2">
+              <p className="text-xs uppercase tracking-wide text-muted-foreground mb-1">Commodities</p>
+              <div className="flex flex-wrap gap-1.5">{enterprise.commodities.map(c => <span key={c} className="bg-secondary text-secondary-foreground text-xs px-2 py-0.5 rounded-md">{c}</span>)}</div>
+            </div>
+          )}
         </div>
       </div>
 

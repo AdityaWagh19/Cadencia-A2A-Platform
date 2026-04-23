@@ -24,6 +24,7 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   PARSED:        { label: 'Parsed',        className: 'bg-amber-950 text-amber-400 border-amber-900' },
   DEPLOYED:      { label: 'Deployed',      className: 'bg-amber-950 text-amber-400 border-amber-900' },
   STALLED:       { label: 'Stalled',       className: 'bg-amber-950 text-amber-400 border-amber-900' },
+  NEGOTIATING:   { label: 'Negotiating',   className: 'bg-purple-950 text-purple-400 border-purple-900' },
 
   // Blue — confirmed states
   CONFIRMED:     { label: 'Confirmed',     className: 'bg-blue-950 text-blue-400 border-blue-900' },

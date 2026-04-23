@@ -56,6 +56,8 @@ COPY --chown=cadencia:cadencia conftest.py ./
 COPY --chown=cadencia:cadencia pyproject.toml ./
 # Compiled Puya TEAL artifacts for on-chain deployment
 COPY --chown=cadencia:cadencia artifacts/ ./artifacts/
+# Seed scripts for demo data
+COPY --chown=cadencia:cadencia scripts/ ./scripts/
 # Supabase private root CA — required for asyncpg ssl verify (pooler uses non-public PKI)
 COPY --chown=cadencia:cadencia supabase-root-ca.pem ./
 

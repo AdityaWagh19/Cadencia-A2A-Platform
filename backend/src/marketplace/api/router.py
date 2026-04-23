@@ -198,11 +198,11 @@ async def get_rfq_matches(
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Status check — matches only available after matching completes
-    if rfq.status.value not in ("MATCHED", "CONFIRMED"):
+    if rfq.status.value not in ("MATCHED", "NEGOTIATING", "CONFIRMED"):
         raise HTTPException(
             status_code=400,
             detail=f"RFQ is in status '{rfq.status.value}'. "
-                   "Matches are only available when status is 'MATCHED' or 'CONFIRMED'.",
+                   "Matches are only available when status is 'MATCHED', 'NEGOTIATING', or 'CONFIRMED'.",
         )
 
     # Use the detailed query that joins Enterprise + CapabilityProfile
@@ -214,13 +214,47 @@ async def get_rfq_matches(
     )
 
 
+# ── POST /v1/marketplace/rfq/{rfq_id}/start-negotiations ────────────────────
+
+
+@router.post(
+    "/rfq/{rfq_id}/start-negotiations",
+    status_code=status.HTTP_200_OK,
+    summary="Start AI negotiations with all matched sellers",
+)
+async def start_negotiations(
+    rfq_id: uuid.UUID,
+    current_user: User = Depends(get_current_buyer),
+    svc: MarketplaceService = Depends(_get_marketplace_service),
+    session: AsyncSession = Depends(get_db_session),
+):
+    from src.marketplace.application.commands import StartNegotiationsCommand
+    rfq = await svc.get_rfq(rfq_id)
+    if str(rfq.buyer_enterprise_id) != str(current_user.enterprise_id):
+        raise HTTPException(status_code=403, detail="Access denied")
+    if rfq.status.value != "MATCHED":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot start negotiations — RFQ status is '{rfq.status.value}', expected 'MATCHED'.",
+        )
+
+    result = await svc.start_all_negotiations(
+        StartNegotiationsCommand(
+            rfq_id=rfq_id,
+            buyer_enterprise_id=current_user.enterprise_id,
+        )
+    )
+    await session.commit()
+    return success_response(result)
+
+
 # ── POST /v1/marketplace/rfq/{rfq_id}/confirm ───────────────────────────────
 
 
 @router.post(
     "/rfq/{rfq_id}/confirm",
     response_model=ApiResponse[ConfirmRFQResponse],
-    summary="Confirm RFQ match → start negotiation",
+    summary="Accept best deal from negotiations → confirm RFQ",
 )
 async def confirm_rfq(
     rfq_id: uuid.UUID,
@@ -229,26 +263,14 @@ async def confirm_rfq(
     svc: MarketplaceService = Depends(_get_marketplace_service),
     session: AsyncSession = Depends(get_db_session),
 ):
-    # Pre-validate RFQ status — return 400 (not 409 ConflictError)
+    # Pre-validate RFQ status
     rfq = await svc.get_rfq(rfq_id)
     if str(rfq.buyer_enterprise_id) != str(current_user.enterprise_id):
         raise HTTPException(status_code=403, detail="Access denied")
-    if rfq.status.value != "MATCHED":
+    if rfq.status.value not in ("MATCHED", "NEGOTIATING"):
         raise HTTPException(
             status_code=400,
-            detail=f"RFQ cannot be confirmed — current status is '{rfq.status.value}'. Must be 'MATCHED'.",
-        )
-
-    # 3.3 — Wallet-link guard: reject early if buyer has no Algorand wallet linked.
-    # Without this, build-fund-txn produces a broken unsigned transaction with a
-    # NULL funder_address, which Pera Wallet will silently fail to sign.
-    from src.identity.infrastructure.repositories import PostgresEnterpriseRepository
-    ent_repo = PostgresEnterpriseRepository(session)
-    buyer_enterprise = await ent_repo.get_by_id(current_user.enterprise_id)
-    if not buyer_enterprise or not buyer_enterprise.algorand_wallet:
-        raise HTTPException(
-            status_code=422,
-            detail="Link your Algorand wallet in Settings → Wallet first.",
+            detail=f"RFQ cannot be confirmed — current status is '{rfq.status.value}'. Must be 'MATCHED' or 'NEGOTIATING'.",
         )
 
     try:
@@ -260,7 +282,6 @@ async def confirm_rfq(
             )
         )
     except Exception as exc:
-        # NotFoundError for match → 404 with spec-required message
         if "Match not found" in str(exc):
             raise HTTPException(
                 status_code=404,

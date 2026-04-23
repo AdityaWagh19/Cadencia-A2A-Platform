@@ -49,7 +49,7 @@ infra/
 
 # Build artifacts — compiled TEAL files ARE needed at runtime for deployment
 # artifacts/ is intentionally included (NOT excluded) so Dockerfile can COPY it
-scripts/
+# scripts/ is included for seed data (seed_users.py, seed_demo_data.py)
 contracts/
 
 

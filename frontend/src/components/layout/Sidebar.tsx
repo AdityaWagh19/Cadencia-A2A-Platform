@@ -49,6 +49,8 @@ export function Sidebar() {
 
   // Filter nav items based on user's trade role
   const visibleItems = navItems.filter((item) => {
+    // Admin users only see Dashboard from regular nav
+    if (isAdmin) return item.href === ROUTES.DASHBOARD;
     // Items without role restrictions are shown to everyone
     if (!item.roles) return true;
     // 'BOTH' trade_role can see both BUYER and SELLER items

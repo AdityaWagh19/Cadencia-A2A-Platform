@@ -24,7 +24,7 @@ export default function CompliancePage() {
   const { isAdmin } = useAuth();
   
   const [activeTab, setActiveTab] = React.useState<'audit' | 'fema' | 'gst'>('audit');
-  const [selectedEscrowId, setSelectedEscrowId] = React.useState<string>('escrow-001'); // Default for mock
+  const [selectedEscrowId, setSelectedEscrowId] = React.useState<string>('');
   const [copiedHash, setCopiedHash] = React.useState<string | null>(null);
 
   const [exportStatus, setExportStatus] = React.useState<'idle' | 'queued' | 'processing' | 'ready' | 'failed'>('idle');
@@ -38,19 +38,27 @@ export default function CompliancePage() {
     ),
   });
 
+  // Auto-select first escrow when data loads
+  React.useEffect(() => {
+    if (recentEscrows && recentEscrows.length > 0 && !selectedEscrowId) {
+      setSelectedEscrowId(recentEscrows[0].escrow_id);
+    }
+  }, [recentEscrows, selectedEscrowId]);
+
   // 2. Audit Logs
-  const { 
-    data: auditLogData, 
-    fetchNextPage, 
-    hasNextPage, 
+  const {
+    data: auditLogData,
+    fetchNextPage,
+    hasNextPage,
     isFetchingNextPage,
     isLoading: isLoadingAudit
   } = useInfiniteQuery({
     queryKey: ['audit', selectedEscrowId],
-    queryFn: ({ pageParam }) => 
+    queryFn: ({ pageParam }) =>
       api.get(`/v1/audit/${selectedEscrowId}?cursor=${pageParam}&limit=20`).then(r => r.data),
     initialPageParam: '',
     getNextPageParam: (lastPage: any) => lastPage.next_cursor || undefined,
+    enabled: !!selectedEscrowId,
   });
 
   const auditLogs: AuditEntry[] = auditLogData?.pages.flatMap((page: any) => page.data?.entries ?? page.data ?? []) || [];
@@ -64,14 +72,14 @@ export default function CompliancePage() {
   const { data: femaRecord, isLoading: isFemaLoading } = useQuery({
     queryKey: ['fema', selectedEscrowId],
     queryFn: () => api.get(`/v1/compliance/${selectedEscrowId}/fema`).then(r => r.data.data),
-    enabled: activeTab === 'fema',
+    enabled: activeTab === 'fema' && !!selectedEscrowId,
   });
 
   // 4. GST Record
   const { data: gstRecord, isLoading: isGstLoading } = useQuery({
     queryKey: ['gst', selectedEscrowId],
     queryFn: () => api.get(`/v1/compliance/${selectedEscrowId}/gst`).then(r => r.data.data),
-    enabled: activeTab === 'gst',
+    enabled: activeTab === 'gst' && !!selectedEscrowId,
   });
 
   // Export Mutations
@@ -126,15 +134,23 @@ export default function CompliancePage() {
 
           {/* Compliance Stats Overview */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-             {/* Note: In a real app, these would come from an aggregation endpoint, using static mocks for UI */}
-             <StatCard label="Total Escrows" value={12} icon={Landmark} />
-             <StatCard label="Audit Entries" value={245} icon={FileText} />
-             <StatCard label="FEMA Records" value={8} icon={File} />
-             <StatCard label="GST Exports" value={15} icon={Receipt} />
+             <StatCard label="Total Escrows" value={recentEscrows?.length ?? 0} icon={Landmark} />
+             <StatCard label="Audit Entries" value={auditLogs.length} icon={FileText} />
+             <StatCard label="FEMA Records" value={femaRecord ? 1 : 0} icon={File} />
+             <StatCard label="GST Exports" value={gstRecord ? 1 : 0} icon={Receipt} />
           </div>
 
+          {/* Empty state when no escrows */}
+          {recentEscrows && recentEscrows.length === 0 && (
+            <div className="bg-card border border-border rounded-lg p-12 text-center">
+              <Landmark className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <h3 className="text-lg font-semibold text-foreground mb-1">No Escrow Transactions Yet</h3>
+              <p className="text-sm text-muted-foreground">Compliance data will appear here once you have completed escrow transactions.</p>
+            </div>
+          )}
+
           {/* Main Content Area */}
-          <div className="bg-card border border-border rounded-lg overflow-hidden">
+          {selectedEscrowId && <div className="bg-card border border-border rounded-lg overflow-hidden">
             <ComplianceTabs activeTab={activeTab} onTabChange={setActiveTab} />
             
             <div className="px-6 pb-6 pt-2">
@@ -309,7 +325,7 @@ export default function CompliancePage() {
               )}
 
             </div>
-          </div>
+          </div>}
 
           {/* Bulk Export (Admin) */}
           <AdminGuard>

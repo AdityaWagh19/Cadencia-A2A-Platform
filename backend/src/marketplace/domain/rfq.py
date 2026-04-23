@@ -117,11 +117,30 @@ class RFQ(BaseEntity):
             "match_count": match_count,
         }
 
-    def confirm(self, selected_match_id: uuid.UUID) -> dict:
-        """Transition: MATCHED → CONFIRMED."""
+    def start_negotiations(self, match_count: int) -> dict:
+        """Transition: MATCHED → NEGOTIATING."""
         if self.status != RFQStatus.MATCHED:
             raise ConflictError(
-                f"Cannot confirm RFQ in status {self.status.value}, expected MATCHED."
+                f"Cannot start negotiations for RFQ in status {self.status.value}, expected MATCHED."
+            )
+        if match_count <= 0:
+            raise ValidationError(
+                "match_count must be > 0 to start negotiations.",
+                field="match_count",
+            )
+        self.status = RFQStatus.NEGOTIATING
+        self.touch()
+        return {
+            "rfq_id": self.id,
+            "buyer_enterprise_id": self.buyer_enterprise_id,
+            "match_count": match_count,
+        }
+
+    def confirm(self, selected_match_id: uuid.UUID) -> dict:
+        """Transition: MATCHED|NEGOTIATING → CONFIRMED."""
+        if self.status not in (RFQStatus.MATCHED, RFQStatus.NEGOTIATING):
+            raise ConflictError(
+                f"Cannot confirm RFQ in status {self.status.value}, expected MATCHED or NEGOTIATING."
             )
         self.status = RFQStatus.CONFIRMED
         self.confirmed_match_id = selected_match_id

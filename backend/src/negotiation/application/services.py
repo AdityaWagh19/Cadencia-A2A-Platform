@@ -110,6 +110,56 @@ class NegotiationService:
                  status=session.status.value)
         return session
 
+    async def _load_rfq_and_catalogue(
+        self, session: NegotiationSession
+    ) -> tuple[dict | None, Decimal | None]:
+        """
+        Load RFQ parsed_fields and best catalogue_price for this session.
+
+        Returns (rfq_parsed_fields, catalogue_price).
+        Both may be None if data is unavailable (freeform sessions).
+        """
+        rfq_parsed_fields: dict | None = None
+        catalogue_price: Decimal | None = None
+
+        try:
+            # Access the underlying DB session from session_repo
+            db_session = self.session_repo._session  # type: ignore[union-attr]
+            from sqlalchemy import select as sa_select
+
+            # 1. Load RFQ parsed_fields
+            from src.marketplace.infrastructure.models import RFQModel
+            rfq_result = await db_session.execute(
+                sa_select(RFQModel.parsed_fields).where(RFQModel.id == session.rfq_id)
+            )
+            rfq_row = rfq_result.scalar_one_or_none()
+            if rfq_row and isinstance(rfq_row, dict):
+                rfq_parsed_fields = rfq_row
+
+            # 2. Load best catalogue price from the seller's active items
+            from src.marketplace.infrastructure.models import CatalogueItemModel
+            cat_result = await db_session.execute(
+                sa_select(CatalogueItemModel.price_per_unit_inr)
+                .where(
+                    CatalogueItemModel.enterprise_id == session.seller_enterprise_id,
+                    CatalogueItemModel.is_active == True,  # noqa: E712
+                )
+                .order_by(CatalogueItemModel.price_per_unit_inr.asc())
+                .limit(1)
+            )
+            cat_price = cat_result.scalar_one_or_none()
+            if cat_price is not None:
+                catalogue_price = Decimal(str(cat_price))
+
+        except Exception:
+            log.warning(
+                "rfq_catalogue_load_failed",
+                session_id=str(session.id),
+                rfq_id=str(session.rfq_id),
+            )
+
+        return rfq_parsed_fields, catalogue_price
+
     async def run_agent_turn(self, session_id: uuid.UUID) -> Offer:
         """Execute one turn of the negotiation (4-layer pipeline via NeutralEngine)."""
         session = await self.session_repo.get_by_id(session_id)  # type: ignore[union-attr]
@@ -135,6 +185,9 @@ class NegotiationService:
         buyer_playbook = await self.playbook_repo.get_by_vertical("general")  # type: ignore[union-attr]
         seller_playbook = buyer_playbook
 
+        # Load transactional context for valuation (RFQ + catalogue)
+        rfq_parsed_fields, catalogue_price = await self._load_rfq_and_catalogue(session)
+
         try:
             offer, is_terminal = await self.neutral_engine.process_turn(  # type: ignore[union-attr]
                 session=session,
@@ -142,6 +195,8 @@ class NegotiationService:
                 seller_profile=seller_profile,
                 buyer_playbook=buyer_playbook,
                 seller_playbook=seller_playbook,
+                rfq_parsed_fields=rfq_parsed_fields,
+                catalogue_price=catalogue_price,
             )
         except LLMExhaustedException:
             # Emit SSE pause, do NOT terminate session

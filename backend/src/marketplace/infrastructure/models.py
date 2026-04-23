@@ -48,7 +48,7 @@ class RFQModel(Base):
     __tablename__ = "rfqs"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('DRAFT','PARSED','MATCHED','CONFIRMED','SETTLED')",
+            "status IN ('DRAFT','PARSED','MATCHED','NEGOTIATING','CONFIRMED','SETTLED')",
             name="ck_rfqs_status",
         ),
     )

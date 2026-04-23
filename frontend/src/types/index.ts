@@ -77,7 +77,7 @@ export interface OptedInApp {
 
 // ─── RFQ & Marketplace ─────────────────────────────────────────────────────
 
-export type RFQStatus = 'DRAFT' | 'PARSING' | 'PARSED' | 'MATCHED' | 'CONFIRMED' | 'REJECTED';
+export type RFQStatus = 'DRAFT' | 'PARSING' | 'PARSED' | 'MATCHED' | 'NEGOTIATING' | 'CONFIRMED' | 'REJECTED';
 
 export interface RFQ {
   id: string;

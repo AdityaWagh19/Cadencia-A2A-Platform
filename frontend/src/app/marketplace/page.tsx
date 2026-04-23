@@ -22,7 +22,7 @@ import { formatDate } from '@/lib/utils';
 import { ROUTES } from '@/lib/constants';
 import type { RFQ, SellerMatch } from '@/types';
 
-const STATUS_OPTIONS = ['All', 'DRAFT', 'PARSED', 'MATCHED', 'CONFIRMED'] as const;
+const STATUS_OPTIONS = ['All', 'DRAFT', 'PARSED', 'MATCHED', 'NEGOTIATING', 'CONFIRMED'] as const;
 
 export default function MarketplacePage() {
   const router = useRouter();
@@ -55,7 +55,19 @@ export default function MarketplacePage() {
   const { data: matches = [], isLoading: matchesLoading } = useQuery<SellerMatch[]>({
     queryKey: ['rfq', selectedRfqId, 'matches'],
     queryFn: () => api.get(`/v1/marketplace/rfq/${selectedRfqId}/matches`).then(r => r.data.data),
-    enabled: !!selectedRfqId && selectedRfq?.status === 'MATCHED',
+    enabled: !!selectedRfqId && (selectedRfq?.status === 'MATCHED' || selectedRfq?.status === 'NEGOTIATING'),
+  });
+
+  // ─── Negotiation sessions for NEGOTIATING RFQs ────────────────────────────
+  const { data: negotiations = [] } = useQuery<any[]>({
+    queryKey: ['rfq', selectedRfqId, 'negotiations'],
+    queryFn: () => api.get('/v1/sessions').then(r => {
+      const sessions = r.data.data || [];
+      // Filter sessions linked to this RFQ
+      return sessions.filter((s: any) => String(s.rfq_id) === selectedRfqId);
+    }),
+    enabled: !!selectedRfqId && selectedRfq?.status === 'NEGOTIATING',
+    refetchInterval: 5000,
   });
 
   // ─── Polling for DRAFT/PARSED RFQs ────────────────────────────────────────
@@ -89,7 +101,23 @@ export default function MarketplacePage() {
     },
   });
 
-  // ─── Confirm match ─────────────────────────────────────────────────────────
+  // ─── Start all negotiations ────────────────────────────────────────────────
+  const startNegotiationsMutation = useMutation({
+    mutationFn: async () => {
+      const res = await api.post(`/v1/marketplace/rfq/${selectedRfqId}/start-negotiations`);
+      return res.data.data as { session_ids: string[]; message: string };
+    },
+    onSuccess: (data) => {
+      toast.success(data.message);
+      queryClient.invalidateQueries({ queryKey: ['rfqs'] });
+      queryClient.invalidateQueries({ queryKey: ['rfq', selectedRfqId, 'negotiations'] });
+    },
+    onError: () => {
+      toast.error('Failed to start negotiations');
+    },
+  });
+
+  // ─── Accept best deal (confirm) ──────────────────────────────────────────
   const confirmMutation = useMutation({
     mutationFn: async (match: SellerMatch) => {
       const res = await api.post(`/v1/marketplace/rfq/${selectedRfqId}/confirm`, {
@@ -98,11 +126,12 @@ export default function MarketplacePage() {
       return res.data.data as { session_id: string };
     },
     onSuccess: (data) => {
-      toast.success('Negotiation session started!');
-      router.push(`${ROUTES.NEGOTIATIONS}/${data.session_id}?auto=true`);
+      toast.success('Deal accepted! Proceeding to escrow.');
+      queryClient.invalidateQueries({ queryKey: ['rfqs'] });
+      router.push(`${ROUTES.ESCROW}`);
     },
     onError: () => {
-      toast.error('Failed to start negotiation');
+      toast.error('Failed to accept deal');
     },
   });
 
@@ -126,8 +155,11 @@ export default function MarketplacePage() {
       rfq={selectedRfq}
       matches={matches}
       matchesLoading={matchesLoading}
-      onConfirm={(match) => confirmMutation.mutate(match)}
-      isConfirming={confirmMutation.isPending}
+      negotiations={negotiations}
+      onStartNegotiations={() => startNegotiationsMutation.mutate()}
+      isStartingNegotiations={startNegotiationsMutation.isPending}
+      onAcceptDeal={(match) => confirmMutation.mutate(match)}
+      isAcceptingDeal={confirmMutation.isPending}
     />
   ) : (
     <div className="flex items-center justify-center h-full py-16">

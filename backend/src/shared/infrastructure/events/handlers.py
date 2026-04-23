@@ -685,6 +685,132 @@ async def handle_rfq_matched_audit(event: object) -> None:
     )
 
 
+async def handle_enterprise_registered_create_profile(event: object) -> None:
+    """
+    Phase Five: EnterpriseRegistered → auto-create CapabilityProfile for sellers.
+
+    Reads enterprise data from DB and creates a CapabilityProfile with
+    commodities, industry, geography, and order values from registration.
+    Also triggers background embedding generation.
+    """
+    enterprise_id = getattr(event, "enterprise_id", None)
+    trade_role = getattr(event, "trade_role", "")
+
+    if trade_role not in ("SELLER", "BOTH"):
+        log.info(
+            "enterprise_registered_skip_profile",
+            enterprise_id=str(enterprise_id),
+            trade_role=trade_role,
+            reason="not_seller",
+        )
+        return
+
+    if not enterprise_id:
+        log.warning("enterprise_registered_missing_id")
+        return
+
+    import asyncio
+    await asyncio.sleep(0.5)  # Wait for parent transaction to commit
+
+    try:
+        from src.shared.infrastructure.db.session import get_session_factory
+        from src.identity.infrastructure.models import EnterpriseModel
+        from src.marketplace.infrastructure.models import CapabilityProfileModel
+        from sqlalchemy import select as sa_select
+        import uuid as uuid_mod
+
+        async with get_session_factory()() as session:
+            # Read enterprise data
+            result = await session.execute(
+                sa_select(EnterpriseModel).where(EnterpriseModel.id == enterprise_id)
+            )
+            ent = result.scalar_one_or_none()
+            if not ent:
+                log.error("enterprise_not_found_for_profile", enterprise_id=str(enterprise_id))
+                return
+
+            # Check if profile already exists
+            existing = await session.execute(
+                sa_select(CapabilityProfileModel).where(
+                    CapabilityProfileModel.enterprise_id == enterprise_id
+                )
+            )
+            if existing.scalar_one_or_none():
+                log.info("profile_already_exists", enterprise_id=str(enterprise_id))
+                return
+
+            # Extract enterprise details from kyc_documents JSONB
+            kyc = ent.kyc_documents or {}
+            commodities = kyc.get("commodities", [])
+            industry = kyc.get("industry_vertical", "")
+            geography = kyc.get("geography", "IN")
+            min_order = kyc.get("min_order_value")
+            max_order = kyc.get("max_order_value")
+
+            # Build profile text from registration data
+            profile_parts = []
+            if ent.name:
+                profile_parts.append(ent.name)
+            if industry:
+                profile_parts.append(f"Industry: {industry}")
+            if commodities:
+                profile_parts.append(f"Products: {', '.join(commodities)}")
+            if geography:
+                profile_parts.append(f"Geography: {geography}")
+            profile_text = ". ".join(profile_parts)
+
+            # Create CapabilityProfile
+            profile = CapabilityProfileModel(
+                id=uuid_mod.uuid4(),
+                enterprise_id=enterprise_id,
+                industry_vertical=industry or None,
+                commodities=commodities,
+                geographies_served=[geography] if geography else [],
+                min_order_value=float(min_order) if min_order is not None else None,
+                max_order_value=float(max_order) if max_order is not None else None,
+                profile_text=profile_text,
+                embedding=None,
+            )
+            session.add(profile)
+            await session.commit()
+
+            log.info(
+                "seller_profile_auto_created",
+                enterprise_id=str(enterprise_id),
+                commodities=commodities,
+                industry=industry,
+            )
+
+            # Trigger background embedding generation
+            from src.marketplace.infrastructure.repositories import (
+                PostgresCapabilityProfileRepository,
+            )
+            from src.marketplace.infrastructure.document_parser import get_document_parser
+
+            parser = get_document_parser()
+            text_parts = [
+                profile_text,
+                " ".join(commodities),
+                geography,
+                industry or "",
+            ]
+            text = " ".join(p for p in text_parts if p)
+            if text.strip():
+                try:
+                    embedding = await parser.generate_embedding(text)
+                    profile.embedding = embedding
+                    await session.commit()
+                    log.info("seller_profile_embedding_generated", enterprise_id=str(enterprise_id))
+                except Exception:
+                    log.exception("seller_profile_embedding_failed", enterprise_id=str(enterprise_id))
+
+    except Exception:
+        log.exception(
+            "handle_enterprise_registered_create_profile_failed",
+            enterprise_id=str(enterprise_id),
+        )
+
+
 def register_phase_five_handlers(publisher: EventPublisher) -> None:
     """
     Register marketplace event handlers.
@@ -694,6 +820,7 @@ def register_phase_five_handlers(publisher: EventPublisher) -> None:
     publisher.subscribe("RFQConfirmed", handle_rfq_confirmed)
     publisher.subscribe("RFQParsed", handle_rfq_parsed_audit)
     publisher.subscribe("RFQMatched", handle_rfq_matched_audit)
+    publisher.subscribe("EnterpriseRegistered", handle_enterprise_registered_create_profile)
 
     log.info(
         "phase_five_event_handlers_registered",
@@ -701,6 +828,7 @@ def register_phase_five_handlers(publisher: EventPublisher) -> None:
             "RFQConfirmed->create_session",
             "RFQParsed->audit",
             "RFQMatched->audit",
+            "EnterpriseRegistered->create_seller_profile",
         ],
     )
 

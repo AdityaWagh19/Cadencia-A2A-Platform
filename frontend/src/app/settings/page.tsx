@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 
 import { AppShell } from '@/components/layout/AppShell';
-import { AdminGuard } from '@/components/shared/AdminGuard';
+import { AuthGuard } from '@/components/shared/AuthGuard';
 import { SectionHeader } from '@/components/shared/SectionHeader';
 import { StatusBadge } from '@/components/shared/StatusBadge';
 import { FormField } from '@/components/shared/FormField';
@@ -182,7 +182,7 @@ export default function SettingsPage() {
 
   return (
     <AppShell>
-      <AdminGuard>
+      <AuthGuard>
         <div className="p-6">
 
           {/* Section 1: Enterprise Profile Summary */}
@@ -464,7 +464,7 @@ export default function SettingsPage() {
             isLoading={revokeKeyMutation.isPending}
           />
         </div>
-      </AdminGuard>
+      </AuthGuard>
     </AppShell>
   );
 }

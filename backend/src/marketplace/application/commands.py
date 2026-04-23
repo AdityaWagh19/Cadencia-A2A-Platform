@@ -24,6 +24,13 @@ class ConfirmRFQCommand:
 
 
 @dataclass(frozen=True)
+class StartNegotiationsCommand:
+    """Start negotiations with all matched sellers for an RFQ."""
+    rfq_id: uuid.UUID
+    buyer_enterprise_id: uuid.UUID
+
+
+@dataclass(frozen=True)
 class UpdateCapabilityProfileCommand:
     enterprise_id: uuid.UUID
     industry_vertical: str | None = None
