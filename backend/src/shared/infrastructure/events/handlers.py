@@ -543,6 +543,146 @@ async def handle_session_failed_audit(event: object) -> None:
     )
 
 
+async def handle_session_agreed_confirm_rfq(event: object) -> None:
+    """
+    Phase Four: SessionAgreed → Transition RFQ from NEGOTIATING → CONFIRMED.
+
+    When a negotiation session reaches agreement, the corresponding RFQ
+    should be marked as CONFIRMED with the winning match selected.
+    """
+    rfq_id = getattr(event, "rfq_id", None)
+    match_id = getattr(event, "match_id", None)
+    seller_enterprise_id = getattr(event, "seller_enterprise_id", None)
+
+    if not rfq_id:
+        log.warning("handle_session_agreed_confirm_rfq_missing_rfq_id")
+        return
+
+    try:
+        from src.shared.infrastructure.db.session import get_session_factory
+        from src.marketplace.infrastructure.repositories import (
+            PostgresRFQRepository,
+            PostgresMatchRepository,
+        )
+
+        async with get_session_factory()() as db_session:
+            rfq_repo = PostgresRFQRepository(db_session)
+            match_repo = PostgresMatchRepository(db_session)
+
+            rfq = await rfq_repo.get_by_id(rfq_id)
+            if not rfq:
+                log.warning("handle_session_agreed_confirm_rfq_rfq_not_found", rfq_id=str(rfq_id))
+                return
+
+            # Only transition if still in NEGOTIATING state
+            if rfq.status.value != "NEGOTIATING":
+                log.info(
+                    "handle_session_agreed_confirm_rfq_skip",
+                    rfq_id=str(rfq_id),
+                    current_status=rfq.status.value,
+                )
+                return
+
+            # Confirm with the winning match
+            if match_id:
+                rfq.confirm(match_id)
+
+                # Select the winning match and reject others
+                all_matches = await match_repo.list_by_rfq(rfq_id)
+                for m in all_matches:
+                    if m.id == match_id:
+                        m.select()
+                        await match_repo.update(m)
+                    elif m.status.value == "PENDING":
+                        m.reject()
+                        await match_repo.update(m)
+            else:
+                # No match_id — still confirm the RFQ with a placeholder
+                import uuid as uuid_mod
+                rfq.confirm(uuid_mod.uuid4())
+
+            await rfq_repo.update(rfq)
+            await db_session.commit()
+
+            log.info(
+                "rfq_confirmed_via_session_agreed",
+                rfq_id=str(rfq_id),
+                match_id=str(match_id),
+            )
+    except Exception:
+        log.exception(
+            "handle_session_agreed_confirm_rfq_failed",
+            rfq_id=str(rfq_id),
+        )
+
+
+async def handle_escrow_released_settle_rfq(event: object) -> None:
+    """
+    Phase Four: EscrowReleased → Transition RFQ from CONFIRMED → SETTLED.
+
+    When the escrow is released (funds sent to seller), the RFQ is fully settled.
+    Looks up rfq_id via the negotiation session linked to the escrow.
+    """
+    session_id = getattr(event, "session_id", None)
+    if not session_id:
+        log.warning("handle_escrow_released_settle_rfq_missing_session_id")
+        return
+
+    try:
+        from src.shared.infrastructure.db.session import get_session_factory
+        from src.marketplace.infrastructure.repositories import PostgresRFQRepository
+        from src.negotiation.infrastructure.models import NegotiationSessionModel
+        from sqlalchemy import select as sa_select
+
+        async with get_session_factory()() as db_session:
+            # Look up rfq_id from the negotiation session
+            result = await db_session.execute(
+                sa_select(NegotiationSessionModel.rfq_id).where(
+                    NegotiationSessionModel.id == session_id
+                )
+            )
+            rfq_id = result.scalar_one_or_none()
+            if not rfq_id:
+                log.warning(
+                    "handle_escrow_released_settle_rfq_session_not_found",
+                    session_id=str(session_id),
+                )
+                return
+
+            rfq_repo = PostgresRFQRepository(db_session)
+            rfq = await rfq_repo.get_by_id(rfq_id)
+            if not rfq:
+                log.warning(
+                    "handle_escrow_released_settle_rfq_rfq_not_found",
+                    rfq_id=str(rfq_id),
+                )
+                return
+
+            # Only transition if in CONFIRMED state
+            if rfq.status.value != "CONFIRMED":
+                log.info(
+                    "handle_escrow_released_settle_rfq_skip",
+                    rfq_id=str(rfq_id),
+                    current_status=rfq.status.value,
+                )
+                return
+
+            rfq.mark_settled()
+            await rfq_repo.update(rfq)
+            await db_session.commit()
+
+            log.info(
+                "rfq_settled_via_escrow_released",
+                rfq_id=str(rfq_id),
+                session_id=str(session_id),
+            )
+    except Exception:
+        log.exception(
+            "handle_escrow_released_settle_rfq_failed",
+            session_id=str(session_id),
+        )
+
+
 def register_phase_four_handlers(publisher: EventPublisher) -> None:
     """
     Replace SessionAgreedStub with real handlers and register
@@ -554,6 +694,10 @@ def register_phase_four_handlers(publisher: EventPublisher) -> None:
     publisher.unsubscribe("SessionAgreedStub", handle_session_agreed_stub)
     publisher.subscribe("SessionAgreed", handle_session_agreed_deploy)
     publisher.subscribe("SessionAgreed", handle_session_agreed_audit)
+    publisher.subscribe("SessionAgreed", handle_session_agreed_confirm_rfq)
+
+    # EscrowReleased → settle RFQ
+    publisher.subscribe("EscrowReleased", handle_escrow_released_settle_rfq)
 
     # Wire negotiation audit events
     publisher.subscribe("OfferSubmitted", handle_offer_submitted_audit)
@@ -565,6 +709,8 @@ def register_phase_four_handlers(publisher: EventPublisher) -> None:
         handlers=[
             "SessionAgreed->deploy",
             "SessionAgreed->audit",
+            "SessionAgreed->confirm_rfq",
+            "EscrowReleased->settle_rfq",
             "OfferSubmitted->audit",
             "HumanOverrideApplied->audit",
             "SessionFailed->audit",

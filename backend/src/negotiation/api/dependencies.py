@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.shared.infrastructure.cache import redis_client
+from src.shared.infrastructure.cache.redis_client import get_redis_client
 from src.shared.infrastructure.db.session import get_db_session
 from src.shared.infrastructure.db.uow import SqlAlchemyUnitOfWork
 from src.shared.infrastructure.events.publisher import get_publisher
@@ -21,9 +21,13 @@ from src.negotiation.infrastructure.repositories import (
 )
 from src.negotiation.infrastructure.sse_publisher import RedisSSEPublisher
 
+import structlog
+
+_dep_log = structlog.get_logger(__name__)
+
 
 async def get_sse_publisher() -> RedisSSEPublisher:
-    redis = await redis_client.get_redis()
+    redis = get_redis_client()
     return RedisSSEPublisher(redis)
 
 
@@ -33,17 +37,13 @@ def get_negotiation_service(
     """Wire NegotiationService with all concrete adapters."""
     agent_driver = get_agent_driver()
 
-    # Attempt to wire SSE publisher — falls back to None if Redis unavailable
+    # Wire SSE publisher using the synchronous get_redis_client() singleton
+    sse_pub = None
     try:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        # Use synchronous check since FastAPI DI doesn't support async Depends here
-        sse_pub = None
-        redis = redis_client._redis  # type: ignore[attr-defined]
-        if redis is not None:
-            sse_pub = RedisSSEPublisher(redis)
-    except Exception:
-        sse_pub = None
+        redis = get_redis_client()
+        sse_pub = RedisSSEPublisher(redis)
+    except Exception as e:
+        _dep_log.warning("sse_publisher_init_failed", error=str(e))
 
     neutral_engine = NeutralEngine(
         agent_driver=agent_driver,

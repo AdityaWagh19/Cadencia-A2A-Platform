@@ -108,8 +108,12 @@ services:
       APP_ENV: development
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cadencia}:${POSTGRES_PASSWORD:-cadencia_dev}@db:5432/${POSTGRES_DB:-cadencia}
       REDIS_URL: redis://:${REDIS_PASSWORD:-cadencia_dev}@redis:6379/0
-      ALGORAND_ALGOD_ADDRESS: http://algorand:8080
-      ALGORAND_ALGOD_TOKEN: ${ALGORAND_ALGOD_TOKEN:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}
+      # Algorand: use TestNet from .env (no localnet override)
+      ALGORAND_NETWORK: ${ALGORAND_NETWORK:-testnet}
+      ALGORAND_ALGOD_ADDRESS: ${ALGORAND_ALGOD_ADDRESS:-https://testnet-api.4160.nodely.dev}
+      ALGORAND_ALGOD_TOKEN: ${ALGORAND_ALGOD_TOKEN:-}
+      ALGORAND_ESCROW_CREATOR_MNEMONIC: ${ALGORAND_ESCROW_CREATOR_MNEMONIC:-}
+      ALGORAND_BALANCE_ALGOD_ADDRESS: ${ALGORAND_BALANCE_ALGOD_ADDRESS:-https://testnet-api.4160.nodely.dev}
       LLM_PROVIDER: ${LLM_PROVIDER:-stub}
     ports:
       - "8000:8000"
@@ -117,8 +121,6 @@ services:
       migration:
         condition: service_completed_successfully
       redis:
-        condition: service_healthy
-      algorand:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]

@@ -191,6 +191,9 @@ async def run_auto_negotiation(
     offers_this_run: list[OfferResponse] = []
     terminal = False
 
+    import structlog
+    _auto_log = structlog.get_logger("negotiation.run_auto")
+
     for round_num in range(max_rounds):
         # Check if session is still active before each turn
         session = await svc.session_repo.get_by_id(session_id)  # type: ignore[union-attr]
@@ -217,8 +220,14 @@ async def run_auto_negotiation(
             # Session transitioned to terminal state during this turn
             terminal = True
             break
-        except Exception:
-            # LLM failure or other error — session paused, stop loop
+        except Exception as exc:
+            _auto_log.error(
+                "run_auto_turn_failed",
+                session_id=str(session_id),
+                round_num=round_num,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
             break
 
         # Reload session to check terminal status after the turn
@@ -351,12 +360,21 @@ async def stream_session(
             event_id = ev.get("event_id", "")
             yield f"id: {event_id}\nevent: {ev.get('event', 'message')}\ndata: {json.dumps(ev)}\n\n"
 
+        # Track the latest event ID we've seen; use empty string sentinel
+        # to avoid re-fetching all events when None
+        current_last_id = (
+            events[-1]["event_id"] if events
+            else last_id or ""
+        )
+
         # Poll for new events
-        current_last_id = events[-1]["event_id"] if events else last_id
         while True:
             if await request.is_disconnected():
                 break
-            new_events = await sse_pub.get_events_since(session_id, current_last_id)
+            new_events = await sse_pub.get_events_since(
+                session_id,
+                current_last_id if current_last_id else None,
+            )
             for ev in new_events:
                 event_id = ev.get("event_id", "")
                 yield f"id: {event_id}\nevent: {ev.get('event', 'message')}\ndata: {json.dumps(ev)}\n\n"

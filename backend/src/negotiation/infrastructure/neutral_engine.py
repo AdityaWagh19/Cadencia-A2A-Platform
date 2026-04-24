@@ -341,22 +341,8 @@ class NeutralEngine:
         # Update Bayesian belief
         self._update_belief_cache(session, current_role, opponent_prices)
 
-        # Publish SSE event
-        elapsed = time.monotonic() - turn_start
-        if self.sse_publisher:
-            sse_event = {
-                "event": "offer" if not is_terminal else action.lower(),
-                "round": session.round_count.value + 1,
-                "proposer": current_role.value,
-                "price": float(final_price),
-                "confidence": confidence,
-                "action": action,
-                "strategy": strategy_rec.strategy.value,
-                "opponent_belief": belief.to_dict(),
-                "session_id": str(session.id),
-                "elapsed_ms": round(elapsed * 1000),
-            }
-            await self.sse_publisher.publish_turn(session.id, sse_event)  # type: ignore[union-attr]
+        # SSE publishing is handled by NegotiationService.run_agent_turn()
+        # to avoid duplicate events reaching the frontend.
 
         return offer, is_terminal
 

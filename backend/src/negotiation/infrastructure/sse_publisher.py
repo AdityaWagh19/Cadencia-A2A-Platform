@@ -43,11 +43,13 @@ class RedisSSEPublisher:
         key = SSE_EVENTS_KEY.format(session_id=str(session_id))
         all_events_raw = await self.redis.lrange(key, 0, -1)  # type: ignore[union-attr]
         all_events = [json.loads(e) for e in all_events_raw]
-        if last_event_id is None:
+        if not last_event_id:
+            # None or empty string → return all events (initial load)
             return all_events
         for i, event in enumerate(all_events):
             if event.get("event_id") == last_event_id:
                 return all_events[i + 1:]
+        # last_event_id not found (evicted) → return all events
         return all_events
 
     async def check_connection_limit(self, enterprise_id: uuid.UUID) -> bool:

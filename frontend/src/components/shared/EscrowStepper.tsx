@@ -8,10 +8,11 @@ import type { EscrowStatus } from '@/types';
 interface EscrowStepperProps {
   status: EscrowStatus;
   appId?: number | null;
+  isSeller?: boolean;
   onAction: (action: 'deploy' | 'fund' | 'release' | 'refund' | 'freeze') => void;
 }
 
-export function EscrowStepper({ status, appId, onAction }: EscrowStepperProps) {
+export function EscrowStepper({ status, appId, isSeller, onAction }: EscrowStepperProps) {
   const steps = [
     { key: 'APPROVED', label: 'Approved' },
     { key: 'DEPLOYED', label: 'Deployed' },
@@ -113,7 +114,7 @@ export function EscrowStepper({ status, appId, onAction }: EscrowStepperProps) {
         {status === 'FUNDED' && (
           <Button onClick={() => onAction('release')} className="bg-primary text-primary-foreground hover:opacity-90 transition-all duration-200 hover:-translate-y-[1px] hover:shadow-[0_4px_16px_hsl(var(--primary)/0.3)]">
             <Unlock className="h-4 w-4 mr-2" />
-            Release
+            {isSeller ? 'Order Complete' : 'Release to Seller'}
           </Button>
         )}
       </div>

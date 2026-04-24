@@ -275,7 +275,7 @@ class NegotiationService:
         if self.sse_publisher:
             await self.sse_publisher.publish_terminal(  # type: ignore[union-attr]
                 session.id,
-                {"event": "agreed", "final_price": float(offer.price.amount), "session_id": str(session.id)},
+                {"event": "session_agreed", "agreed_price": float(offer.price.amount), "session_id": str(session.id)},
             )
 
         # Update profiles (learning via EMA)
@@ -303,7 +303,7 @@ class NegotiationService:
         if self.sse_publisher:
             await self.sse_publisher.publish_terminal(  # type: ignore[union-attr]
                 session.id,
-                {"event": "walk_away", "reason": reason, "session_id": str(session.id)},
+                {"event": "session_failed", "reason": f"WALK_AWAY: {reason}", "session_id": str(session.id)},
             )
         log.info("session_walk_away", session_id=str(session.id), reason=reason)
 
@@ -316,7 +316,7 @@ class NegotiationService:
         if self.sse_publisher:
             await self.sse_publisher.publish_terminal(  # type: ignore[union-attr]
                 session.id,
-                {"event": "failed", "reason": reason, "session_id": str(session.id)},
+                {"event": "session_failed", "reason": reason, "session_id": str(session.id)},
             )
         log.info("session_failed", session_id=str(session.id), reason=reason)
 
@@ -333,7 +333,7 @@ class NegotiationService:
         if self.sse_publisher:
             await self.sse_publisher.publish_turn(  # type: ignore[union-attr]
                 session.id,
-                {"event": "escalated", "reason": "stall_detected",
+                {"event": "stall_detected", "reason": "stall_detected",
                  "round": session.round_count.value, "session_id": str(session.id)},
             )
         log.info("session_stalled", session_id=str(session.id))
@@ -351,7 +351,7 @@ class NegotiationService:
         if self.sse_publisher:
             await self.sse_publisher.publish_terminal(  # type: ignore[union-attr]
                 session.id,
-                {"event": "timeout", "session_id": str(session.id)},
+                {"event": "round_timeout", "timeout_round": session.round_count.value, "session_id": str(session.id)},
             )
         log.info("session_timeout", session_id=str(session.id))
 
@@ -364,7 +364,7 @@ class NegotiationService:
         if self.sse_publisher:
             await self.sse_publisher.publish_terminal(  # type: ignore[union-attr]
                 session.id,
-                {"event": "policy_breach", "session_id": str(session.id)},
+                {"event": "session_failed", "reason": "POLICY_BREACH: Schema validation failed 3x", "session_id": str(session.id)},
             )
         log.info("session_policy_breach", session_id=str(session.id))
 
@@ -433,7 +433,7 @@ class NegotiationService:
         if self.sse_publisher:
             await self.sse_publisher.publish_terminal(  # type: ignore[union-attr]
                 session.id,
-                {"event": "terminated", "reason": cmd.reason, "session_id": str(session.id)},
+                {"event": "session_failed", "reason": f"TERMINATED: {cmd.reason}", "session_id": str(session.id)},
             )
         log.info("session_terminated", session_id=str(session.id))
 

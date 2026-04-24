@@ -25,7 +25,7 @@ import type { NegotiationSession, Escrow, Settlement } from '@/types';
 
 export default function EscrowPage() {
   const queryClient = useQueryClient();
-  const { isAdmin } = useAuth();
+  const { isAdmin, isSeller } = useAuth();
   const { signAndSubmitDeployTxn, signAndSubmitFundTxn, signAndSubmitReleaseTxn, signAndSubmitRefundTxn, activeAddress } = useWalletContext();
   
   const [selectedSessionId, setSelectedSessionId] = React.useState<string | null>(null);
@@ -208,6 +208,7 @@ export default function EscrowPage() {
                     <EscrowStepper
                       status={selectedEscrow.status}
                       appId={selectedEscrow.algo_app_id}
+                      isSeller={isSeller}
                       onAction={(action) => handleAction(action, selectedEntry.session.session_id, selectedEscrow.escrow_id)}
                     />
                     {isDeploying && (

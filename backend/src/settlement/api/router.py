@@ -310,10 +310,10 @@ async def platform_deploy_escrow(
         )
     )
 
-    if escrow.status.value not in ("APPROVED", "PENDING_APPROVAL"):
+    if escrow.status.value != "APPROVED":
         raise HTTPException(
             status_code=409,
-            detail=f"Escrow cannot be deployed in state: {escrow.status.value}",
+            detail=f"Escrow must be APPROVED by admin before deployment. Current state: {escrow.status.value}",
         )
 
     # 2. Look up buyer/seller Algorand addresses from enterprise profiles
