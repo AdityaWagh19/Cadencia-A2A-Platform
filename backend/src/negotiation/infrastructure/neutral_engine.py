@@ -432,44 +432,68 @@ class NeutralEngine:
         Fallback path: budget_ceiling-based derivation (for freeform sessions
         without an RFQ or when parsed_fields lack required keys).
         """
-        # ── Primary path: RFQ + catalogue data ──
+        # ── Primary path: RFQ budget data (most reliable) ──
+        if rfq_parsed_fields is not None and is_buyer:
+            budget_min = rfq_parsed_fields.get("budget_min")
+            budget_max = rfq_parsed_fields.get("budget_max")
+
+            if budget_max is not None:
+                # Use RFQ budget directly — this is the buyer's stated constraint
+                if budget_min is None:
+                    budget_min = Decimal(str(budget_max)) * Decimal("0.80")
+                val = compute_buyer_valuation_from_rfq(
+                    budget_min=Decimal(str(budget_min)),
+                    budget_max=Decimal(str(budget_max)),
+                    risk_appetite=profile.risk_profile.risk_appetite,
+                )
+                log.info(
+                    "valuation_computed",
+                    source="rfq_budget",
+                    role="buyer",
+                    budget_min=str(budget_min),
+                    budget_max=str(budget_max),
+                    reservation=str(val.reservation_price),
+                    target=str(val.target_price),
+                )
+                return val
+
+        # ── Secondary path: RFQ quantity × unit_rate ──
         try:
             if rfq_parsed_fields is not None:
-                quantity_raw = rfq_parsed_fields["quantity"]
-                unit_rate_raw = rfq_parsed_fields["unit_rate"]
-                quantity = Decimal(str(quantity_raw))
-                unit_rate = Decimal(str(unit_rate_raw))
-                intrinsic_value = quantity * unit_rate
+                quantity_raw = rfq_parsed_fields.get("quantity")
+                unit_rate_raw = rfq_parsed_fields.get("unit_rate")
+                if quantity_raw is not None and unit_rate_raw is not None:
+                    quantity = Decimal(str(quantity_raw))
+                    unit_rate = Decimal(str(unit_rate_raw))
+                    intrinsic_value = quantity * unit_rate
 
-                if is_buyer:
-                    budget_min = rfq_parsed_fields.get("budget_min")
-                    budget_max = rfq_parsed_fields.get("budget_max")
-                    if budget_min is not None and budget_max is not None:
-                        val = compute_buyer_valuation_from_rfq(
-                            budget_min=Decimal(str(budget_min)),
-                            budget_max=Decimal(str(budget_max)),
-                            risk_appetite=profile.risk_profile.risk_appetite,
-                        )
-                    else:
-                        # Use intrinsic value as fair price with budget_ceiling cap
+                    if is_buyer:
                         val = compute_buyer_valuation(
                             fair_price=intrinsic_value,
                             risk_appetite=profile.risk_profile.risk_appetite,
                             budget_ceiling=profile.risk_profile.budget_ceiling,
                         )
+                    else:
+                        cost_basis = catalogue_price if catalogue_price is not None else intrinsic_value
+                        val = compute_seller_valuation_from_catalogue(
+                            catalogue_price=cost_basis,
+                            margin_floor=profile.risk_profile.margin_floor,
+                            risk_appetite=profile.risk_profile.risk_appetite,
+                        )
                     log.info(
                         "valuation_computed",
                         source="rfq_catalogue",
-                        role="buyer",
+                        role="buyer" if is_buyer else "seller",
                         intrinsic=str(intrinsic_value),
                         reservation=str(val.reservation_price),
                         target=str(val.target_price),
                     )
                     return val
-                else:
-                    # Seller: use catalogue_price as cost basis if available,
-                    # otherwise derive from intrinsic value
-                    cost_basis = catalogue_price if catalogue_price is not None else intrinsic_value
+
+                # Seller path: use budget_max from RFQ as market reference
+                if not is_buyer and rfq_parsed_fields.get("budget_max") is not None:
+                    market_ref = Decimal(str(rfq_parsed_fields["budget_max"]))
+                    cost_basis = catalogue_price if catalogue_price is not None else market_ref * Decimal("0.70")
                     val = compute_seller_valuation_from_catalogue(
                         catalogue_price=cost_basis,
                         margin_floor=profile.risk_profile.margin_floor,
@@ -477,14 +501,14 @@ class NeutralEngine:
                     )
                     log.info(
                         "valuation_computed",
-                        source="rfq_catalogue",
+                        source="rfq_budget_seller",
                         role="seller",
-                        intrinsic=str(intrinsic_value),
                         cost_basis=str(cost_basis),
                         reservation=str(val.reservation_price),
                         target=str(val.target_price),
                     )
                     return val
+
         except (KeyError, TypeError, ValueError, ArithmeticError) as e:
             log.warning(
                 "valuation_rfq_fallback",

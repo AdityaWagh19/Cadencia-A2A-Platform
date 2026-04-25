@@ -24,6 +24,10 @@ const nextConfig: NextConfig = {
         source: '/v1/:path*',
         destination: `${BACKEND_INTERNAL_URL}/v1/:path*`,
       },
+      {
+        source: '/health',
+        destination: `${BACKEND_INTERNAL_URL}/health`,
+      },
     ];
   },
 };

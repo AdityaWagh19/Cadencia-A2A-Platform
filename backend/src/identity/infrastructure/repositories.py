@@ -64,6 +64,15 @@ def _enterprise_to_domain(m: EnterpriseModel) -> Enterprise:
         agent_config=m.agent_config,
         listing_active=True,
     )
+    # Enhanced onboarding fields (stored in dedicated DB columns)
+    enterprise.facility_type = m.facility_type
+    enterprise.payment_terms_accepted = list(m.payment_terms_accepted) if m.payment_terms_accepted else []
+    enterprise.credit_period_days = m.credit_period_days
+    enterprise.years_in_operation = m.years_in_operation
+    enterprise.annual_turnover_inr = Decimal(str(m.annual_turnover_inr)) if m.annual_turnover_inr else None
+    enterprise.quality_certifications = list(m.quality_certifications) if m.quality_certifications else []
+    enterprise.test_certificate_available = bool(m.test_certificate_available) if m.test_certificate_available else False
+    enterprise.third_party_inspection_allowed = bool(m.third_party_inspection_allowed) if m.third_party_inspection_allowed else False
     return enterprise
 
 
@@ -94,6 +103,15 @@ def _enterprise_to_model(e: Enterprise, existing: EnterpriseModel | None = None)
         existing.algorand_wallet = e.algorand_wallet.value if e.algorand_wallet else None
         existing.kyc_documents = agent_config or None
         existing.agent_config = e.agent_config
+        # Enhanced onboarding fields
+        existing.facility_type = getattr(e, "facility_type", None)
+        existing.payment_terms_accepted = getattr(e, "payment_terms_accepted", None) or None
+        existing.credit_period_days = getattr(e, "credit_period_days", None)
+        existing.years_in_operation = getattr(e, "years_in_operation", None)
+        existing.annual_turnover_inr = float(e.annual_turnover_inr) if getattr(e, "annual_turnover_inr", None) else None
+        existing.quality_certifications = getattr(e, "quality_certifications", None) or None
+        existing.test_certificate_available = getattr(e, "test_certificate_available", False)
+        existing.third_party_inspection_allowed = getattr(e, "third_party_inspection_allowed", False)
         return existing
 
     return EnterpriseModel(
@@ -106,6 +124,14 @@ def _enterprise_to_model(e: Enterprise, existing: EnterpriseModel | None = None)
         algorand_wallet=e.algorand_wallet.value if e.algorand_wallet else None,
         kyc_documents=agent_config or None,
         agent_config=e.agent_config,
+        facility_type=getattr(e, "facility_type", None),
+        payment_terms_accepted=getattr(e, "payment_terms_accepted", None) or None,
+        credit_period_days=getattr(e, "credit_period_days", None),
+        years_in_operation=getattr(e, "years_in_operation", None),
+        annual_turnover_inr=float(e.annual_turnover_inr) if getattr(e, "annual_turnover_inr", None) else None,
+        quality_certifications=getattr(e, "quality_certifications", None) or None,
+        test_certificate_available=getattr(e, "test_certificate_available", False),
+        third_party_inspection_allowed=getattr(e, "third_party_inspection_allowed", False),
     )
 
 

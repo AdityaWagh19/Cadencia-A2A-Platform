@@ -121,18 +121,22 @@ class PostgresRFQRepository:
         return _rfq_model_to_domain(model) if model else None
 
     async def update(self, rfq: RFQ) -> None:
+        values: dict = {
+            "status": rfq.status.value,
+            "parsed_fields": rfq.parsed_fields,
+            "hsn_code": rfq.hsn_code.value if rfq.hsn_code else None,
+            "budget_min": float(rfq.budget_range.min_value) if rfq.budget_range else None,
+            "budget_max": float(rfq.budget_range.max_value) if rfq.budget_range else None,
+            "geography": rfq.geography_pref,
+            "confirmed_match_id": rfq.confirmed_match_id,
+        }
+        # Persist embedding when available (critical for pgvector matching)
+        if rfq.embedding is not None:
+            values["embedding"] = rfq.embedding
         stmt = (
             update(RFQModel)
             .where(RFQModel.id == rfq.id)
-            .values(
-                status=rfq.status.value,
-                parsed_fields=rfq.parsed_fields,
-                hsn_code=rfq.hsn_code.value if rfq.hsn_code else None,
-                budget_min=float(rfq.budget_range.min_value) if rfq.budget_range else None,
-                budget_max=float(rfq.budget_range.max_value) if rfq.budget_range else None,
-                geography=rfq.geography_pref,
-                confirmed_match_id=rfq.confirmed_match_id,
-            )
+            .values(**values)
         )
         await self._session.execute(stmt)
 
@@ -224,7 +228,10 @@ class PostgresMatchRepository:
         stmt = (
             update(MatchModel)
             .where(MatchModel.id == match.id)
-            .values(rank=match.rank)
+            .values(
+                rank=match.rank,
+                score=float(match.similarity_score.value) if match.similarity_score else 0.0,
+            )
         )
         await self._session.execute(stmt)
 

@@ -178,8 +178,11 @@ class StubDocumentParser:
         # 4. Extract geography
         geography = self._extract_geography(text_lower)
 
+        # Fallback: always return a product for non-empty text so the RFQ
+        # transitions to PARSED and can proceed to matching.
         if not product:
-            return {}
+            words = [w for w in raw_text.split() if len(w) > 2 and not w.isdigit()]
+            product = " ".join(words[:5]) if words else raw_text.strip()[:50]
 
         return {
             "product": product,

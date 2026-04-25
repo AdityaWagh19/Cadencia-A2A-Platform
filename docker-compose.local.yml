@@ -1,0 +1,105 @@
+# Local development compose — builds from source (includes code fixes)
+# Usage: docker compose -f docker-compose.local.yml up --build
+
+services:
+
+  # PostgreSQL 16 + pgvector
+  db:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: cadencia
+      POSTGRES_PASSWORD: cadencia_dev
+      POSTGRES_DB: cadencia
+    ports:
+      - "5433:5432"
+    volumes:
+      - cadencia_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cadencia -d cadencia"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # Redis 7
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass cadencia_dev --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6380:6379"
+    volumes:
+      - cadencia_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "cadencia_dev", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  # Database migration (one-off)
+  migration:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: migration
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cadencia:cadencia_dev@db:5432/cadencia
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  # Backend (FastAPI) — built from source
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://cadencia:cadencia_dev@db:5432/cadencia
+      REDIS_URL: redis://:cadencia_dev@redis:6379/0
+      ALGORAND_NETWORK: testnet
+      ALGORAND_ALGOD_ADDRESS: https://testnet-api.4160.nodely.dev
+      ALGORAND_ALGOD_TOKEN: ""
+      ALGORAND_BALANCE_ALGOD_ADDRESS: https://testnet-api.4160.nodely.dev
+      ALGORAND_BALANCE_ALGOD_TOKEN: ""
+      CORS_ALLOWED_ORIGINS: http://localhost:3001,http://localhost:3000
+    depends_on:
+      migration:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+
+  # Frontend (Next.js) — built from source
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      NEXT_INTERNAL_BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_ENABLE_MOCKS: "false"
+      NEXT_PUBLIC_ALGORAND_NETWORK: testnet
+      NEXT_PUBLIC_ALGOD_SERVER: https://testnet-api.4160.nodely.dev
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  cadencia_db_data:
+  cadencia_redis_data:

@@ -129,8 +129,14 @@ class MarketplaceService:
                     log.error("rfq_not_found_for_parse", rfq_id=str(rfq_id))
                     return
 
-                # 1. Extract fields via LLM
-                parsed = await self._parser.extract_rfq_fields(rfq.raw_document or "")
+                # 1. Extract fields via LLM (with fallback to stub parser)
+                try:
+                    parsed = await self._parser.extract_rfq_fields(rfq.raw_document or "")
+                except Exception as parse_exc:
+                    log.warning("rfq_llm_extraction_failed_using_fallback", rfq_id=str(rfq_id), error=str(parse_exc))
+                    from src.marketplace.infrastructure.rfq_parser import StubDocumentParser
+                    fallback = StubDocumentParser()
+                    parsed = await fallback.extract_rfq_fields(rfq.raw_document or "")
                 if not parsed:
                     log.warning("rfq_extraction_empty", rfq_id=str(rfq_id))
                     return  # Stay DRAFT — no fields extracted
@@ -616,12 +622,24 @@ class MarketplaceService:
         )
         from src.shared.infrastructure.db.session import get_session_factory
 
+        # Wait for the parent request's transaction to commit before we read.
+        await asyncio.sleep(0.5)
+
         factory = get_session_factory()
         async with factory() as session:
             try:
                 profile_repo = PostgresCapabilityProfileRepository(session)
                 profile = await profile_repo.get_by_enterprise(enterprise_id)
+
+                # Retry if profile not yet visible (transaction isolation)
                 if profile is None:
+                    for _attempt in range(3):
+                        await asyncio.sleep(0.5)
+                        profile = await profile_repo.get_by_enterprise(enterprise_id)
+                        if profile is not None:
+                            break
+                if profile is None:
+                    log.warning("embedding_profile_not_found", enterprise_id=str(enterprise_id))
                     return
                 text_parts = [
                     profile.profile_text or "",
