@@ -1,0 +1,725 @@
+# context.md §3: Application service — orchestrates use cases.
+# All infrastructure deps injected via constructor (DIP).
+
+from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+from typing import TYPE_CHECKING
+
+from src.marketplace.application.commands import (
+    ConfirmRFQCommand,
+    StartNegotiationsCommand,
+    UpdateCapabilityProfileCommand,
+    UploadRFQCommand,
+)
+from src.marketplace.domain.capability_profile import CapabilityProfile
+from src.marketplace.domain.events import (
+    CapabilityProfileUpdated,
+    RFQConfirmed,
+    RFQMatched,
+    RFQParsed,
+    RFQUploaded,
+)
+from src.marketplace.domain.match import Match
+from src.marketplace.domain.rfq import RFQ
+from src.marketplace.domain.value_objects import SimilarityScore
+from src.shared.domain.exceptions import AuthorizationError, NotFoundError
+from src.shared.infrastructure.logging import get_logger
+from src.shared.infrastructure.metrics import RFQ_UPLOADS_TOTAL
+
+if TYPE_CHECKING:
+    from src.marketplace.domain.ports import (
+        ICapabilityProfileRepository,
+        IDocumentParser,
+        IMatchmakingEngine,
+        IMatchRepository,
+        IRFQRepository,
+    )
+    from src.shared.infrastructure.events.publisher import EventPublisher
+
+log = get_logger(__name__)
+
+
+class MarketplaceService:
+    """Orchestrates marketplace use cases."""
+
+    def __init__(
+        self,
+        rfq_repo: IRFQRepository,
+        match_repo: IMatchRepository,
+        profile_repo: ICapabilityProfileRepository,
+        document_parser: IDocumentParser,
+        matchmaking_engine: IMatchmakingEngine,
+        event_publisher: EventPublisher,
+        top_n_matches: int = 10,
+    ) -> None:
+        self._rfq_repo = rfq_repo
+        self._match_repo = match_repo
+        self._profile_repo = profile_repo
+        self._parser = document_parser
+        self._matchmaker = matchmaking_engine
+        self._publisher = event_publisher
+        self._top_n = top_n_matches
+
+    async def upload_rfq(self, cmd: UploadRFQCommand) -> RFQ:
+        """Create RFQ in DRAFT, schedule background parse+match. Returns immediately."""
+        rfq = RFQ(
+            buyer_enterprise_id=cmd.buyer_enterprise_id,
+            raw_document=cmd.raw_text,
+        )
+        await self._rfq_repo.save(rfq)
+
+        await self._publisher.publish(
+            RFQUploaded(
+                aggregate_id=rfq.id,
+                event_type="RFQUploaded",
+                rfq_id=rfq.id,
+                buyer_enterprise_id=rfq.buyer_enterprise_id,
+                raw_document_length=len(cmd.raw_text),
+            )
+        )
+
+        # Background parse & match — non-blocking (uses its own DB session)
+        asyncio.create_task(self._parse_and_match_standalone(rfq.id))
+
+        # Prometheus: RFQ upload success
+        RFQ_UPLOADS_TOTAL.labels(status="success").inc()
+
+        log.info("rfq_uploaded", rfq_id=str(rfq.id), status=rfq.status.value)
+        return rfq
+
+    async def _parse_and_match_standalone(self, rfq_id: uuid.UUID) -> None:
+        """Background task with its own DB session — avoids asyncpg concurrency errors."""
+        import os
+        from src.marketplace.infrastructure.pgvector_matchmaker import PgvectorMatchmaker, StubMatchmakingEngine
+        from src.marketplace.infrastructure.keyword_matchmaker import KeywordMatchmaker
+        from src.marketplace.infrastructure.repositories import (
+            PostgresCapabilityProfileRepository,
+            PostgresMatchRepository,
+            PostgresRFQRepository,
+        )
+        from src.shared.infrastructure.db.session import get_session_factory
+
+        # Wait for the parent request's transaction to commit before we read.
+        # Retry with backoff if the row isn't visible yet (transaction isolation).
+        await asyncio.sleep(0.3)
+
+        factory = get_session_factory()
+        async with factory() as session:
+            try:
+                rfq_repo = PostgresRFQRepository(session)
+                match_repo = PostgresMatchRepository(session)
+                llm_provider = os.environ.get("LLM_PROVIDER", "stub")
+                if llm_provider == "stub":
+                    matchmaker = StubMatchmakingEngine(session=session)
+                else:
+                    matchmaker = PgvectorMatchmaker(session)
+
+                rfq = await rfq_repo.get_by_id(rfq_id)
+                if rfq is None:
+                    # Retry: parent transaction may not have committed yet
+                    for _attempt in range(3):
+                        await asyncio.sleep(0.5)
+                        rfq = await rfq_repo.get_by_id(rfq_id)
+                        if rfq is not None:
+                            break
+                if rfq is None:
+                    log.error("rfq_not_found_for_parse", rfq_id=str(rfq_id))
+                    return
+
+                # 1. Extract fields via LLM (with fallback to stub parser)
+                try:
+                    parsed = await self._parser.extract_rfq_fields(rfq.raw_document or "")
+                except Exception as parse_exc:
+                    log.warning("rfq_llm_extraction_failed_using_fallback", rfq_id=str(rfq_id), error=str(parse_exc))
+                    from src.marketplace.infrastructure.rfq_parser import StubDocumentParser
+                    fallback = StubDocumentParser()
+                    parsed = await fallback.extract_rfq_fields(rfq.raw_document or "")
+                if not parsed:
+                    log.warning("rfq_extraction_empty", rfq_id=str(rfq_id))
+                    return  # Stay DRAFT — no fields extracted
+
+                # 2. Mark parsed
+                event_data = rfq.mark_parsed(parsed)
+                await rfq_repo.update(rfq)
+                await session.commit()
+
+                await self._publisher.publish(
+                    RFQParsed(
+                        aggregate_id=rfq.id,
+                        event_type="RFQParsed",
+                        **event_data,
+                    )
+                )
+
+                # 3. Generate embedding
+                embed_text = (rfq.raw_document or "") + " " + json.dumps(parsed)
+                embedding = await self._parser.generate_embedding(embed_text)
+                rfq.embedding = embedding
+
+                # 4. Find matches — use enhanced matching if RFQ has delivery data
+                has_delivery_data = bool(
+                    parsed.get("delivery_window_days")
+                    or parsed.get("quantity")
+                    or parsed.get("budget_min")
+                )
+
+                # Try to get buyer's delivery pincode from their address
+                buyer_pincode = None
+                buyer_delivery_window = parsed.get("delivery_window_days")
+                # Parse quantity — may be "100 MT" or "100" or 100
+                buyer_qty_raw = parsed.get("quantity")
+                buyer_qty = None
+                if buyer_qty_raw is not None:
+                    import re as _re
+                    qty_match = _re.search(r'[\d.]+', str(buyer_qty_raw))
+                    if qty_match:
+                        try:
+                            buyer_qty = float(qty_match.group())
+                        except ValueError:
+                            buyer_qty = None
+                buyer_budget_min = parsed.get("budget_min")
+                buyer_budget_max = parsed.get("budget_max")
+                product_category = parsed.get("product_category")
+
+                if has_delivery_data and hasattr(matchmaker, 'find_enhanced_matches'):
+                    # Fetch buyer address for pincode
+                    from src.marketplace.infrastructure.models import AddressModel
+                    from sqlalchemy import select as sa_select
+                    addr_result = await session.execute(
+                        sa_select(AddressModel).where(
+                            AddressModel.enterprise_id == rfq.buyer_enterprise_id,
+                            AddressModel.is_primary == True,  # noqa: E712
+                        )
+                    )
+                    buyer_addr = addr_result.scalar_one_or_none()
+                    if buyer_addr:
+                        buyer_pincode = buyer_addr.pincode
+
+                    enhanced_results = await matchmaker.find_enhanced_matches(
+                        rfq=rfq,
+                        rfq_embedding=embedding,
+                        buyer_pincode=buyer_pincode,
+                        buyer_delivery_window=int(buyer_delivery_window) if buyer_delivery_window else None,
+                        buyer_qty=float(buyer_qty) if buyer_qty else None,
+                        buyer_budget_min=float(buyer_budget_min) if buyer_budget_min else None,
+                        buyer_budget_max=float(buyer_budget_max) if buyer_budget_max else None,
+                        product_category=product_category,
+                        top_n=self._top_n,
+                    )
+
+                    if enhanced_results:
+                        matches = [
+                            Match(
+                                rfq_id=rfq.id,
+                                seller_enterprise_id=m["enterprise_id"],
+                                similarity_score=SimilarityScore(value=m["composite_score"]),
+                                rank=m["rank"],
+                            )
+                            for m in enhanced_results
+                        ]
+                        await match_repo.save_bulk(matches)
+
+                        # Store scoring breakdown in match rows
+                        for m_data in enhanced_results:
+                            from src.marketplace.infrastructure.models import MatchModel
+                            match_row = await session.execute(
+                                sa_select(MatchModel).where(
+                                    MatchModel.rfq_id == rfq.id,
+                                    MatchModel.seller_enterprise_id == m_data["enterprise_id"],
+                                )
+                            )
+                            row = match_row.scalar_one_or_none()
+                            if row:
+                                row.semantic_score = m_data.get("semantic_score")
+                                row.delivery_feasibility_score = m_data.get("delivery_feasibility_score")
+                                row.capacity_score = m_data.get("capacity_score")
+                                row.price_score = m_data.get("price_score")
+                                row.proximity_score = m_data.get("proximity_score")
+                                row.composite_score = m_data.get("composite_score")
+                                row.estimated_delivery_days = m_data.get("estimated_delivery_days")
+                                row.distance_km = m_data.get("distance_km")
+
+                        raw_matches = [(m["enterprise_id"], m["composite_score"]) for m in enhanced_results]
+                    else:
+                        raw_matches = []
+                else:
+                    # Fallback: standard pgvector matching
+                    raw_matches = await matchmaker.find_matches(
+                        rfq, embedding, self._top_n
+                    )
+
+                    # Fallback to keyword matching if pgvector returns no/low results
+                    if not raw_matches or (raw_matches and all(s < 0.3 for _, s in raw_matches)):
+                        keyword_matchmaker = KeywordMatchmaker(session)
+                        keyword_results = await keyword_matchmaker.find_matches(rfq, embedding, self._top_n)
+                        if keyword_results:
+                            raw_matches = keyword_results
+
+                    if raw_matches:
+                        matches = [
+                            Match(
+                                rfq_id=rfq.id,
+                                seller_enterprise_id=ent_id,
+                                similarity_score=SimilarityScore(value=score),
+                                rank=rank + 1,
+                            )
+                            for rank, (ent_id, score) in enumerate(raw_matches)
+                        ]
+                        await match_repo.save_bulk(matches)
+
+                # Fallback: if no matches found, try direct enterprise commodity matching
+                if not raw_matches:
+                    log.info("rfq_trying_enterprise_fallback", rfq_id=str(rfq_id))
+                    try:
+                        from src.identity.infrastructure.models import EnterpriseModel
+                        from sqlalchemy import select as sa_select, or_
+                        parsed_product = (rfq.parsed_fields or {}).get("product_name", "")
+                        parsed_category = (rfq.parsed_fields or {}).get("product_category", "")
+                        search_terms = [t.lower() for t in [parsed_product, parsed_category] if t]
+
+                        ent_stmt = sa_select(EnterpriseModel).where(
+                            EnterpriseModel.id != rfq.buyer_enterprise_id,
+                            or_(
+                                EnterpriseModel.trade_role == "SELLER",
+                                EnterpriseModel.trade_role == "BOTH",
+                            ),
+                        )
+                        ent_result = await session.execute(ent_stmt)
+                        seller_ents = ent_result.scalars().all()
+
+                        fallback_matches = []
+                        for ent in seller_ents:
+                            kyc = ent.kyc_documents or {}
+                            ent_commodities = [c.lower() for c in kyc.get("commodities", [])]
+                            ent_industry = (kyc.get("industry_vertical") or "").lower()
+
+                            # Check if any search term overlaps
+                            match_score = 0.0
+                            for term in search_terms:
+                                if any(term in c or c in term for c in ent_commodities):
+                                    match_score += 0.5
+                                if term in ent_industry or ent_industry in term:
+                                    match_score += 0.3
+                            if not search_terms and ent_commodities:
+                                # No specific product in RFQ - give base score to all sellers
+                                match_score = 0.3
+
+                            if match_score > 0:
+                                fallback_matches.append((ent.id, round(min(match_score, 1.0), 3)))
+
+                        fallback_matches.sort(key=lambda x: x[1], reverse=True)
+                        raw_matches = fallback_matches[:self._top_n]
+
+                        if raw_matches:
+                            matches = [
+                                Match(
+                                    rfq_id=rfq.id,
+                                    seller_enterprise_id=ent_id,
+                                    similarity_score=SimilarityScore(value=score),
+                                    rank=rank + 1,
+                                )
+                                for rank, (ent_id, score) in enumerate(raw_matches)
+                            ]
+                            await match_repo.save_bulk(matches)
+                            log.info("rfq_enterprise_fallback_matched", rfq_id=str(rfq_id), count=len(raw_matches))
+                    except Exception:
+                        log.exception("rfq_enterprise_fallback_failed", rfq_id=str(rfq_id))
+
+                if not raw_matches:
+                    log.info("rfq_no_matches", rfq_id=str(rfq_id))
+                    await rfq_repo.update(rfq)
+                    await session.commit()
+                    return  # Stay PARSED
+
+                # 6. Mark matched
+                rfq_matched_data = rfq.mark_matched(len(matches))
+                await rfq_repo.update(rfq)
+                await session.commit()
+
+                await self._publisher.publish(
+                    RFQMatched(
+                        aggregate_id=rfq.id,
+                        event_type="RFQMatched",
+                        top_score=raw_matches[0][1] if raw_matches else 0.0,
+                        **rfq_matched_data,
+                    )
+                )
+
+                log.info(
+                    "rfq_parsed_and_matched",
+                    rfq_id=str(rfq_id),
+                    match_count=len(matches),
+                )
+
+            except Exception:
+                log.exception("rfq_parse_match_failed", rfq_id=str(rfq_id))
+
+    async def get_rfq(self, rfq_id: uuid.UUID) -> RFQ:
+        rfq = await self._rfq_repo.get_by_id(rfq_id)
+        if rfq is None:
+            raise NotFoundError("RFQ", rfq_id)
+        return rfq
+
+    async def get_matches(self, rfq_id: uuid.UUID) -> list[Match]:
+        return await self._match_repo.list_by_rfq(rfq_id)
+
+    async def confirm_rfq(self, cmd: ConfirmRFQCommand) -> dict:
+        """Confirm an RFQ match — resolves match from seller_enterprise_id,
+        transitions RFQ to CONFIRMED, creates negotiation session SYNCHRONOUSLY,
+        and returns the real session_id."""
+        rfq = await self._rfq_repo.get_by_id(cmd.rfq_id)
+        if rfq is None:
+            raise NotFoundError("RFQ", cmd.rfq_id)
+
+        if rfq.buyer_enterprise_id != cmd.buyer_enterprise_id:
+            raise AuthorizationError("Only the buyer can confirm an RFQ.")
+
+        # Resolve match from seller_enterprise_id
+        match = await self._match_repo.get_match_by_seller(
+            rfq_id=cmd.rfq_id,
+            seller_enterprise_id=cmd.seller_enterprise_id,
+        )
+        if match is None:
+            raise NotFoundError("Match", f"seller={cmd.seller_enterprise_id}")
+
+        # Confirm RFQ + select match
+        confirm_data = rfq.confirm(match.id)
+        match.select()
+
+        # Reject all other matches for this RFQ
+        all_matches = await self._match_repo.list_by_rfq(rfq.id)
+        for m in all_matches:
+            if m.id != match.id and m.status.value == "PENDING":
+                m.reject()
+                await self._match_repo.update(m)
+
+        await self._rfq_repo.update(rfq)
+        await self._match_repo.update(match)
+
+        # Create negotiation session SYNCHRONOUSLY to avoid session_id mismatch
+        session_id = await self._create_negotiation_session_sync(
+            match_id=match.id,
+            rfq_id=rfq.id,
+            buyer_enterprise_id=rfq.buyer_enterprise_id,
+            seller_enterprise_id=match.seller_enterprise_id,
+        )
+
+        # Publish RFQConfirmed for audit/observability (non-blocking)
+        await self._publisher.publish(
+            RFQConfirmed(
+                aggregate_id=rfq.id,
+                event_type="RFQConfirmed",
+                rfq_id=rfq.id,
+                match_id=match.id,
+                buyer_enterprise_id=rfq.buyer_enterprise_id,
+                seller_enterprise_id=match.seller_enterprise_id,
+            )
+        )
+
+        log.info(
+            "rfq_confirmed",
+            rfq_id=str(rfq.id),
+            match_id=str(match.id),
+            session_id=str(session_id),
+        )
+        return {
+            "message": "Negotiation session created",
+            "session_id": str(session_id),
+        }
+
+    async def start_all_negotiations(self, cmd: StartNegotiationsCommand) -> dict:
+        """Start negotiations with ALL matched sellers simultaneously.
+        Transitions RFQ from MATCHED → NEGOTIATING, creates sessions for each match."""
+        rfq = await self._rfq_repo.get_by_id(cmd.rfq_id)
+        if rfq is None:
+            raise NotFoundError("RFQ", cmd.rfq_id)
+
+        if rfq.buyer_enterprise_id != cmd.buyer_enterprise_id:
+            raise AuthorizationError("Only the buyer can start negotiations.")
+
+        # Get all pending matches
+        all_matches = await self._match_repo.list_by_rfq(rfq.id)
+        pending_matches = [m for m in all_matches if m.status.value == "PENDING"]
+
+        if not pending_matches:
+            raise NotFoundError("Matches", f"No pending matches for RFQ {cmd.rfq_id}")
+
+        # Transition RFQ to NEGOTIATING
+        rfq.start_negotiations(len(pending_matches))
+        await self._rfq_repo.update(rfq)
+
+        # Create negotiation sessions for ALL matches
+        session_ids = []
+        for match in pending_matches:
+            try:
+                session_id = await self._create_negotiation_session_sync(
+                    match_id=match.id,
+                    rfq_id=rfq.id,
+                    buyer_enterprise_id=rfq.buyer_enterprise_id,
+                    seller_enterprise_id=match.seller_enterprise_id,
+                )
+                session_ids.append(str(session_id))
+                log.info(
+                    "negotiation_session_started",
+                    rfq_id=str(rfq.id),
+                    match_id=str(match.id),
+                    session_id=str(session_id),
+                    seller_id=str(match.seller_enterprise_id),
+                )
+            except Exception:
+                log.exception(
+                    "negotiation_session_start_failed",
+                    rfq_id=str(rfq.id),
+                    match_id=str(match.id),
+                )
+
+        log.info(
+            "all_negotiations_started",
+            rfq_id=str(rfq.id),
+            session_count=len(session_ids),
+            match_count=len(pending_matches),
+        )
+
+        # Auto-run negotiations in the background for each session
+        for sid in session_ids:
+            asyncio.create_task(self._run_auto_negotiation_standalone(uuid.UUID(sid)))
+
+        return {
+            "message": f"Started {len(session_ids)} negotiation sessions — auto-negotiating",
+            "session_ids": session_ids,
+            "rfq_status": "NEGOTIATING",
+        }
+
+    async def _create_negotiation_session_sync(
+        self,
+        match_id: uuid.UUID,
+        rfq_id: uuid.UUID,
+        buyer_enterprise_id: uuid.UUID,
+        seller_enterprise_id: uuid.UUID,
+    ) -> uuid.UUID:
+        """Create a negotiation session synchronously with its own DB session."""
+        from src.shared.infrastructure.db.session import get_session_factory
+        from src.shared.infrastructure.db.uow import SqlAlchemyUnitOfWork
+        from src.shared.infrastructure.events.publisher import get_publisher
+        from src.negotiation.application.services import NegotiationService
+        from src.negotiation.application.commands import CreateSessionCommand
+        from src.negotiation.infrastructure.llm_agent_driver import get_agent_driver
+        from src.negotiation.infrastructure.neutral_engine import NeutralEngine
+        from src.negotiation.infrastructure.personalization import PersonalizationBuilder
+        from src.negotiation.infrastructure.repositories import (
+            PostgresAgentProfileRepository,
+            PostgresOfferRepository,
+            PostgresPlaybookRepository,
+            PostgresSessionRepository,
+        )
+
+        async with get_session_factory()() as db_session:
+            engine = NeutralEngine(
+                agent_driver=get_agent_driver(),
+                personalization_builder=PersonalizationBuilder(),
+                sse_publisher=None,
+            )
+            svc = NegotiationService(
+                session_repo=PostgresSessionRepository(db_session),
+                offer_repo=PostgresOfferRepository(db_session),
+                profile_repo=PostgresAgentProfileRepository(db_session),
+                playbook_repo=PostgresPlaybookRepository(db_session),
+                neutral_engine=engine,
+                sse_publisher=None,
+                event_publisher=get_publisher(),
+                uow=SqlAlchemyUnitOfWork(db_session),
+            )
+            session = await svc.create_session(
+                CreateSessionCommand(
+                    match_id=match_id,
+                    rfq_id=rfq_id,
+                    buyer_enterprise_id=buyer_enterprise_id,
+                    seller_enterprise_id=seller_enterprise_id,
+                )
+            )
+            return session.id
+
+    async def _run_auto_negotiation_standalone(self, session_id: uuid.UUID) -> None:
+        """Background: run auto-negotiation for a session with its own DB session."""
+        from src.shared.infrastructure.db.session import get_session_factory
+        from src.shared.infrastructure.db.uow import SqlAlchemyUnitOfWork
+        from src.shared.infrastructure.events.publisher import get_publisher
+        from src.negotiation.application.services import NegotiationService
+        from src.negotiation.infrastructure.llm_agent_driver import get_agent_driver
+        from src.negotiation.infrastructure.neutral_engine import NeutralEngine
+        from src.negotiation.infrastructure.personalization import PersonalizationBuilder
+        from src.negotiation.infrastructure.repositories import (
+            PostgresAgentProfileRepository,
+            PostgresOfferRepository,
+            PostgresPlaybookRepository,
+            PostgresSessionRepository,
+        )
+
+        # Wait for session creation to be committed
+        await asyncio.sleep(1.0)
+
+        max_rounds = 20
+        async with get_session_factory()() as db_session:
+            try:
+                engine = NeutralEngine(
+                    agent_driver=get_agent_driver(),
+                    personalization_builder=PersonalizationBuilder(),
+                    sse_publisher=None,
+                )
+                svc = NegotiationService(
+                    session_repo=PostgresSessionRepository(db_session),
+                    offer_repo=PostgresOfferRepository(db_session),
+                    profile_repo=PostgresAgentProfileRepository(db_session),
+                    playbook_repo=PostgresPlaybookRepository(db_session),
+                    neutral_engine=engine,
+                    sse_publisher=None,
+                    event_publisher=get_publisher(),
+                    uow=SqlAlchemyUnitOfWork(db_session),
+                )
+
+                for _round in range(max_rounds):
+                    session = await svc.session_repo.get_by_id(session_id)
+                    if not session or not session.status.is_active:
+                        break
+                    try:
+                        await svc.run_agent_turn(session_id)
+                    except Exception as turn_exc:
+                        log.warning(
+                            "auto_negotiation_turn_error",
+                            session_id=str(session_id),
+                            error=str(turn_exc),
+                        )
+                        break
+
+                session = await svc.session_repo.get_by_id(session_id)
+                log.info(
+                    "auto_negotiation_complete",
+                    session_id=str(session_id),
+                    final_status=session.status.value if session else "unknown",
+                )
+            except Exception:
+                log.exception("auto_negotiation_failed", session_id=str(session_id))
+
+    async def list_rfqs(
+        self,
+        buyer_enterprise_id: uuid.UUID,
+        limit: int = 20,
+        offset: int = 0,
+        statuses: list[str] | None = None,
+    ) -> list[RFQ]:
+        """List RFQs for the buyer's enterprise with optional status filter."""
+        return await self._rfq_repo.list_by_buyer(
+            buyer_enterprise_id=buyer_enterprise_id,
+            limit=limit,
+            offset=offset,
+            statuses=statuses,
+        )
+
+    async def list_incoming_rfqs(
+        self,
+        seller_enterprise_id: uuid.UUID,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> list[dict]:
+        """List RFQs where this seller enterprise is in the match results."""
+        matches = await self._match_repo.list_by_seller(
+            seller_enterprise_id=seller_enterprise_id,
+            limit=limit,
+            offset=offset,
+        )
+        results = []
+        for match in matches:
+            rfq = await self._rfq_repo.get_by_id(match.rfq_id)
+            if rfq:
+                results.append({
+                    "match_id": match.id,
+                    "rfq_id": rfq.id,
+                    "raw_text": rfq.raw_document or "",
+                    "status": rfq.status.value,
+                    "parsed_fields": rfq.parsed_fields,
+                    "created_at": rfq.created_at,
+                    "similarity_score": match.similarity_score.value if match.similarity_score else 0.0,
+                    "rank": match.rank,
+                    "match_status": match.status.value,
+                    "buyer_enterprise_id": rfq.buyer_enterprise_id,
+                })
+        return results
+
+    async def update_capability_profile(
+        self, cmd: UpdateCapabilityProfileCommand
+    ) -> CapabilityProfile:
+        profile = await self._profile_repo.get_by_enterprise(cmd.enterprise_id)
+        if profile is None:
+            profile = CapabilityProfile(enterprise_id=cmd.enterprise_id)
+
+        event_data = profile.update_profile(
+            industry_vertical=cmd.industry_vertical,
+            product_categories=cmd.product_categories,
+            geography_scope=cmd.geography_scope,
+            trade_volume_min=cmd.trade_volume_min,
+            trade_volume_max=cmd.trade_volume_max,
+            profile_text=cmd.profile_text,
+        )
+
+        if await self._profile_repo.get_by_enterprise(cmd.enterprise_id):
+            await self._profile_repo.update(profile)
+        else:
+            await self._profile_repo.save(profile)
+
+        await self._publisher.publish(
+            CapabilityProfileUpdated(
+                aggregate_id=profile.id,
+                event_type="CapabilityProfileUpdated",
+                **event_data,
+            )
+        )
+
+        # Schedule background embedding recompute (uses its own DB session)
+        asyncio.create_task(self._recompute_embedding_standalone(cmd.enterprise_id))
+        return profile
+
+    async def _recompute_embedding_standalone(self, enterprise_id: uuid.UUID) -> None:
+        """Background: generate embedding for capability profile with its own DB session."""
+        from src.marketplace.infrastructure.repositories import (
+            PostgresCapabilityProfileRepository,
+        )
+        from src.shared.infrastructure.db.session import get_session_factory
+
+        # Wait for the parent request's transaction to commit before we read.
+        await asyncio.sleep(0.5)
+
+        factory = get_session_factory()
+        async with factory() as session:
+            try:
+                profile_repo = PostgresCapabilityProfileRepository(session)
+                profile = await profile_repo.get_by_enterprise(enterprise_id)
+
+                # Retry if profile not yet visible (transaction isolation)
+                if profile is None:
+                    for _attempt in range(3):
+                        await asyncio.sleep(0.5)
+                        profile = await profile_repo.get_by_enterprise(enterprise_id)
+                        if profile is not None:
+                            break
+                if profile is None:
+                    log.warning("embedding_profile_not_found", enterprise_id=str(enterprise_id))
+                    return
+                text_parts = [
+                    profile.profile_text or "",
+                    " ".join(profile.product_categories),
+                    " ".join(profile.geography_scope),
+                    profile.industry_vertical or "",
+                ]
+                text = " ".join(p for p in text_parts if p)
+                if not text.strip():
+                    return
+                embedding = await self._parser.generate_embedding(text)
+                profile.set_embedding(embedding)
+                await profile_repo.update(profile)
+                await session.commit()
+                log.info("embedding_recomputed", enterprise_id=str(enterprise_id))
+            except Exception:
+                log.exception("embedding_recompute_failed", enterprise_id=str(enterprise_id))

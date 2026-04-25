@@ -1,0 +1,66 @@
+# ═══════════════════════════════════════════════════════════════
+# Cadencia — .dockerignore
+# Keep production image lean: no tests, docs, VCS, caches
+# ═══════════════════════════════════════════════════════════════
+
+# Version control
+.git
+.gitignore
+
+# Python caches
+__pycache__
+*.pyc
+*.pyo
+*.egg-info
+.eggs
+
+# Virtual environment
+.venv
+venv
+env
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Tests (not needed in production image)
+tests/
+PHASE*_TESTS.md
+
+# Documentation (not needed in runtime)
+docs/
+*.md
+!README.md
+
+# Development config
+.env
+.env.*
+!.env.example
+Dockerfile.dev
+docker-compose*.yml
+Caddyfile
+
+# Infrastructure / CI
+infra/
+.github/
+.claude/
+
+# Build artifacts — compiled TEAL files ARE needed at runtime for deployment
+# artifacts/ is intentionally included (NOT excluded) so Dockerfile can COPY it
+# scripts/ is included for seed data (seed_users.py, seed_demo_data.py)
+contracts/
+
+
+# Node (if any)
+node_modules/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
