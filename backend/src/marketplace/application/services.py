@@ -482,8 +482,13 @@ class MarketplaceService:
             session_count=len(session_ids),
             match_count=len(pending_matches),
         )
+
+        # Auto-run negotiations in the background for each session
+        for sid in session_ids:
+            asyncio.create_task(self._run_auto_negotiation_standalone(uuid.UUID(sid)))
+
         return {
-            "message": f"Started {len(session_ids)} negotiation sessions",
+            "message": f"Started {len(session_ids)} negotiation sessions — auto-negotiating",
             "session_ids": session_ids,
             "rfq_status": "NEGOTIATING",
         }
@@ -536,6 +541,67 @@ class MarketplaceService:
                 )
             )
             return session.id
+
+    async def _run_auto_negotiation_standalone(self, session_id: uuid.UUID) -> None:
+        """Background: run auto-negotiation for a session with its own DB session."""
+        from src.shared.infrastructure.db.session import get_session_factory
+        from src.shared.infrastructure.db.uow import SqlAlchemyUnitOfWork
+        from src.shared.infrastructure.events.publisher import get_publisher
+        from src.negotiation.application.services import NegotiationService
+        from src.negotiation.infrastructure.llm_agent_driver import get_agent_driver
+        from src.negotiation.infrastructure.neutral_engine import NeutralEngine
+        from src.negotiation.infrastructure.personalization import PersonalizationBuilder
+        from src.negotiation.infrastructure.repositories import (
+            PostgresAgentProfileRepository,
+            PostgresOfferRepository,
+            PostgresPlaybookRepository,
+            PostgresSessionRepository,
+        )
+
+        # Wait for session creation to be committed
+        await asyncio.sleep(1.0)
+
+        max_rounds = 20
+        async with get_session_factory()() as db_session:
+            try:
+                engine = NeutralEngine(
+                    agent_driver=get_agent_driver(),
+                    personalization_builder=PersonalizationBuilder(),
+                    sse_publisher=None,
+                )
+                svc = NegotiationService(
+                    session_repo=PostgresSessionRepository(db_session),
+                    offer_repo=PostgresOfferRepository(db_session),
+                    profile_repo=PostgresAgentProfileRepository(db_session),
+                    playbook_repo=PostgresPlaybookRepository(db_session),
+                    neutral_engine=engine,
+                    sse_publisher=None,
+                    event_publisher=get_publisher(),
+                    uow=SqlAlchemyUnitOfWork(db_session),
+                )
+
+                for _round in range(max_rounds):
+                    session = await svc.session_repo.get_by_id(session_id)
+                    if not session or not session.status.is_active:
+                        break
+                    try:
+                        await svc.run_agent_turn(session_id)
+                    except Exception as turn_exc:
+                        log.warning(
+                            "auto_negotiation_turn_error",
+                            session_id=str(session_id),
+                            error=str(turn_exc),
+                        )
+                        break
+
+                session = await svc.session_repo.get_by_id(session_id)
+                log.info(
+                    "auto_negotiation_complete",
+                    session_id=str(session_id),
+                    final_status=session.status.value if session else "unknown",
+                )
+            except Exception:
+                log.exception("auto_negotiation_failed", session_id=str(session_id))
 
     async def list_rfqs(
         self,

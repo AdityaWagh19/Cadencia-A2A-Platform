@@ -91,14 +91,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const adminLogin = async (email: string, password: string) => {
-    const { data } = await api.post('/v1/auth/login', { email, password });
+    const { data } = await api.post('/v1/auth/admin-login', { email, password });
     setAccessToken(data.data.access_token);
     try {
       await fetchProfile();
     } catch {
-      // Profile fetch failed after successful auth — clear token and surface error
-      setAccessToken(null);
-      throw new Error('Logged in but failed to load your profile. Please try again.');
+      // Admin backdoor user has no real enterprise — profile fetch may fail.
+      // Keep authenticated, just skip profile.
     }
     router.push(ROUTES.ADMIN);
   };

@@ -100,6 +100,28 @@ async def list_sessions(
         offset=offset,
     )
     items = [_session_to_response(s).model_dump(mode="json") for s in sessions]
+
+    # Enrich with enterprise names for the table display
+    ent_ids = set()
+    for item in items:
+        ent_ids.add(item["buyer_enterprise_id"])
+        ent_ids.add(item["seller_enterprise_id"])
+    if ent_ids:
+        try:
+            db_session = svc.session_repo._session  # type: ignore[union-attr]
+            from sqlalchemy import select as sa_select
+            from src.identity.infrastructure.models import EnterpriseModel
+            result = await db_session.execute(
+                sa_select(EnterpriseModel.id, EnterpriseModel.name)
+                .where(EnterpriseModel.id.in_(ent_ids))
+            )
+            name_map = {str(row.id): row.name for row in result.fetchall()}
+            for item in items:
+                item["buyer_name"] = name_map.get(item["buyer_enterprise_id"], "")
+                item["seller_name"] = name_map.get(item["seller_enterprise_id"], "")
+        except Exception:
+            pass  # Non-fatal — names are optional enrichment
+
     return success_response(data=items)
 
 

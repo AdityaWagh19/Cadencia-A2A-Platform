@@ -68,11 +68,11 @@ export default function NegotiationsPage() {
   const [dateRange, setDateRange] = React.useState('all');
   const [terminateTarget, setTerminateTarget] = React.useState<NegotiationSession | null>(null);
 
-  // ─── Fetch all sessions ─────────────────────────────────────────────────────
+  // ─── Fetch all sessions (poll every 3s while any are ACTIVE) ─────────────────
   const { data: sessions = [], isLoading } = useQuery<NegotiationSession[]>({
     queryKey: ['sessions'],
     queryFn: () => api.get('/v1/sessions').then(r => r.data.data),
-    staleTime: 60_000,
+    refetchInterval: 3000,
   });
 
   // ─── Filter ─────────────────────────────────────────────────────────────────

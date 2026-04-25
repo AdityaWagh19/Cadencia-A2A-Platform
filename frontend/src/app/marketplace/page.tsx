@@ -101,16 +101,17 @@ export default function MarketplacePage() {
     },
   });
 
-  // ─── Start all negotiations ────────────────────────────────────────────────
+  // ─── Start all negotiations (auto-negotiates in background) ────────────────
   const startNegotiationsMutation = useMutation({
     mutationFn: async () => {
       const res = await api.post(`/v1/marketplace/rfq/${selectedRfqId}/start-negotiations`);
       return res.data.data as { session_ids: string[]; message: string };
     },
     onSuccess: (data) => {
-      toast.success(data.message);
+      toast.success(`${data.message}. AI agents are negotiating — check the Negotiations page for live results.`);
       queryClient.invalidateQueries({ queryKey: ['rfqs'] });
       queryClient.invalidateQueries({ queryKey: ['rfq', selectedRfqId, 'negotiations'] });
+      queryClient.invalidateQueries({ queryKey: ['sessions'] });
     },
     onError: () => {
       toast.error('Failed to start negotiations');
