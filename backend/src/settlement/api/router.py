@@ -92,6 +92,292 @@ class PendingEscrowResponse(BaseModel):
     created_at: str
 
 
+
+# ── POST /v1/escrow/select-deal ───────────────────────────────────────────────
+
+
+class SelectDealRequest(BaseModel):
+    session_id: str = Field(description="Session ID of the agreed deal to proceed with")
+
+
+class SelectDealResponse(BaseModel):
+    escrow_id: str
+    session_id: str
+    status: str
+    message: str
+
+
+
+
+@router.post(
+    "/select-deal",
+    response_model=ApiResponse[SelectDealResponse],
+    summary="Buyer selects ONE agreed deal to proceed with escrow",
+    dependencies=[Depends(rate_limit)],
+)
+async def select_deal(
+    body: SelectDealRequest,
+    current_user: User = Depends(get_current_user),
+    svc: SettlementServiceDep = Depends(get_settlement_service),
+) -> ApiResponse[SelectDealResponse]:
+    """
+    Buyer picks one agreed negotiation session to proceed to payment.
+    Creates an escrow in PENDING_APPROVAL state (waiting for seller to accept).
+    """
+    from fastapi import HTTPException
+    from src.settlement.application.commands import CreatePendingEscrowCommand
+
+    session_id = uuid.UUID(body.session_id)
+
+    # Verify the session exists, is AGREED, and belongs to this buyer
+    try:
+        db_session = svc._uow._session
+        from sqlalchemy import select as sa_select
+        from src.negotiation.infrastructure.models import NegotiationSessionModel
+        result = await db_session.execute(
+            sa_select(NegotiationSessionModel).where(NegotiationSessionModel.id == session_id)
+        )
+        nego_session = result.scalar_one_or_none()
+    except Exception:
+        nego_session = None
+
+    if not nego_session:
+        raise HTTPException(status_code=404, detail="Negotiation session not found")
+    if str(nego_session.buyer_enterprise_id) != str(current_user.enterprise_id):
+        raise HTTPException(status_code=403, detail="Only the buyer can select a deal")
+    if nego_session.status != "AGREED":
+        raise HTTPException(status_code=409, detail=f"Session must be AGREED, current: {nego_session.status}")
+
+    # Get agreed price
+    agreed_price = float(nego_session.agreed_price) if nego_session.agreed_price else 0
+
+    result = await svc.create_pending_escrow(
+        CreatePendingEscrowCommand(
+            session_id=session_id,
+            buyer_enterprise_id=nego_session.buyer_enterprise_id,
+            seller_enterprise_id=nego_session.seller_enterprise_id,
+            agreed_price_inr=agreed_price,
+        )
+    )
+
+    return success_response(SelectDealResponse(
+        escrow_id=str(result["escrow_id"]),
+        session_id=body.session_id,
+        status="PENDING_APPROVAL",
+        message="Deal selected. Waiting for seller to accept.",
+    ))
+
+
+
+# ── POST /v1/escrow/{escrow_id}/seller-approve ─────────────────────────────────
+
+
+@router.post(
+    "/{escrow_id}/seller-approve",
+    response_model=ApiResponse[dict],
+    summary="Seller accepts the deal — auto-deploys escrow contract",
+    dependencies=[Depends(rate_limit)],
+)
+async def seller_approve_escrow(
+    escrow_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    svc: SettlementServiceDep = Depends(get_settlement_service),
+) -> ApiResponse[dict]:
+    """
+    Seller approves the buyer's selected deal.
+    Transitions PENDING_APPROVAL → APPROVED, then auto-deploys the escrow
+    smart contract from the platform wallet (APPROVED → DEPLOYED).
+    """
+    from fastapi import HTTPException
+    from src.settlement.application.queries import GetEscrowByIdQuery
+    from src.settlement.infrastructure.algorand_gateway import AlgorandGateway
+    from src.identity.infrastructure.models import EnterpriseModel
+    from sqlalchemy import select as sql_select
+
+    # 1. Load escrow and verify seller ownership
+    escrow = await svc.get_escrow_by_id(
+        GetEscrowByIdQuery(escrow_id=escrow_id, requesting_enterprise_id=current_user.enterprise_id)
+    )
+    if escrow.status.value != "PENDING_APPROVAL":
+        raise HTTPException(status_code=409, detail=f"Escrow is {escrow.status.value}, expected PENDING_APPROVAL")
+
+    # Verify current user is the seller for this escrow
+    from src.settlement.infrastructure.models import EscrowContractModel
+    escrow_row = await svc._uow._session.execute(
+        sql_select(EscrowContractModel).where(EscrowContractModel.id == escrow_id)
+    )
+    escrow_model = escrow_row.scalar_one_or_none()
+    if not escrow_model or str(escrow_model.seller_enterprise_id) != str(current_user.enterprise_id):
+        raise HTTPException(status_code=403, detail="Only the seller can approve this deal")
+
+    # 2. Approve (PENDING_APPROVAL → APPROVED)
+    await svc.approve_escrow(ApproveEscrowCommand(escrow_id=escrow_id, admin_user_id=current_user.id))
+
+    # 3. Auto-deploy from platform wallet (APPROVED → DEPLOYED)
+    buyer_address = ""
+    seller_address = ""
+    try:
+        for eid, attr in [(escrow_model.buyer_enterprise_id, "buyer"), (escrow_model.seller_enterprise_id, "seller")]:
+            ent_result = await svc._uow._session.execute(
+                sql_select(EnterpriseModel).where(EnterpriseModel.id == eid)
+            )
+            ent = ent_result.scalar_one_or_none()
+            addr = ent.algorand_wallet if ent else ""
+            if attr == "buyer":
+                buyer_address = addr or ""
+            else:
+                seller_address = addr or ""
+    except Exception:
+        pass
+
+    gateway = AlgorandGateway()
+    if not buyer_address:
+        buyer_address = gateway._creator_address or ""
+    if not seller_address:
+        seller_address = gateway._creator_address or ""
+
+    amount_microalgo = escrow.amount.value.value if hasattr(escrow.amount, 'value') else 100_000
+
+    try:
+        blockchain_result = await gateway.deploy_escrow(
+            buyer_address=buyer_address,
+            seller_address=seller_address,
+            amount_microalgo=amount_microalgo,
+            session_id=str(escrow_model.session_id),
+        )
+        await svc.record_pera_deploy(
+            session_id=escrow_model.session_id,
+            app_id=blockchain_result["app_id"],
+            app_address=blockchain_result["app_address"],
+            tx_id=blockchain_result["tx_id"],
+        )
+        deploy_status = "DEPLOYED"
+        deploy_msg = f"Deal accepted and smart contract deployed (App ID: {blockchain_result['app_id']}). Buyer can now fund."
+    except Exception as deploy_exc:
+        log.exception("seller_approve_auto_deploy_failed", escrow_id=str(escrow_id))
+        deploy_status = "APPROVED"
+        deploy_msg = f"Deal accepted but auto-deploy failed: {deploy_exc}. Manual deploy needed."
+
+    return success_response({
+        "escrow_id": str(escrow_id),
+        "status": deploy_status,
+        "message": deploy_msg,
+    })
+
+
+
+# ── POST /v1/escrow/{escrow_id}/seller-dispatch ────────────────────────────────
+
+
+@router.post(
+    "/{escrow_id}/seller-dispatch",
+    response_model=ApiResponse[dict],
+    summary="Seller marks goods dispatched",
+    dependencies=[Depends(rate_limit)],
+)
+async def seller_dispatch_order(
+    escrow_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    svc: SettlementServiceDep = Depends(get_settlement_service),
+) -> ApiResponse[dict]:
+    """Seller confirms goods have been dispatched. FUNDED → DISPATCHED."""
+    from fastapi import HTTPException
+    from src.settlement.application.queries import GetEscrowByIdQuery
+    from src.settlement.infrastructure.models import EscrowContractModel
+    from sqlalchemy import select as sql_select, text as sql_text
+
+    escrow = await svc.get_escrow_by_id(
+        GetEscrowByIdQuery(escrow_id=escrow_id, requesting_enterprise_id=current_user.enterprise_id)
+    )
+    if escrow.status.value != "FUNDED":
+        raise HTTPException(status_code=409, detail=f"Escrow must be FUNDED, current: {escrow.status.value}")
+
+    escrow_row = await svc._uow._session.execute(
+        sql_select(EscrowContractModel).where(EscrowContractModel.id == escrow_id)
+    )
+    escrow_model = escrow_row.scalar_one_or_none()
+    if not escrow_model or str(escrow_model.seller_enterprise_id) != str(current_user.enterprise_id):
+        raise HTTPException(status_code=403, detail="Only the seller can mark order as dispatched")
+
+    # Patch null tx_ids before state transition (ESC-02)
+    if not escrow_model.fund_tx_id or not escrow_model.deploy_tx_id:
+        await svc._uow._session.execute(
+            sql_text(
+                "UPDATE escrow_contracts SET "
+                "fund_tx_id = COALESCE(fund_tx_id, 'platform-funded'), "
+                "deploy_tx_id = COALESCE(deploy_tx_id, 'platform-deployed') "
+                "WHERE id = :eid"
+            ),
+            {"eid": str(escrow_id)},
+        )
+        await svc._uow._session.commit()
+
+    await svc.mark_dispatched(escrow_id)
+    log.info("seller_dispatch_order", escrow_id=str(escrow_id))
+
+    return success_response({
+        "escrow_id": str(escrow_id),
+        "status": "DISPATCHED",
+        "message": "Order marked as dispatched. Waiting for buyer to confirm delivery.",
+    })
+
+
+# ── POST /v1/escrow/{escrow_id}/buyer-confirm ──────────────────────────────────
+
+
+@router.post(
+    "/{escrow_id}/buyer-confirm",
+    response_model=ApiResponse[dict],
+    summary="Buyer confirms delivery — releases funds to seller",
+    dependencies=[Depends(rate_limit)],
+)
+async def buyer_confirm_delivery(
+    escrow_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    svc: SettlementServiceDep = Depends(get_settlement_service),
+) -> ApiResponse[dict]:
+    """Buyer confirms goods received. DISPATCHED → RELEASED via platform wallet."""
+    from fastapi import HTTPException
+    from src.settlement.application.queries import GetEscrowByIdQuery
+    from src.settlement.infrastructure.algorand_gateway import AlgorandGateway
+    from src.settlement.infrastructure.models import EscrowContractModel
+    from sqlalchemy import select as sql_select
+
+    escrow = await svc.get_escrow_by_id(
+        GetEscrowByIdQuery(escrow_id=escrow_id, requesting_enterprise_id=current_user.enterprise_id)
+    )
+    if escrow.status.value != "DISPATCHED":
+        raise HTTPException(status_code=409, detail=f"Escrow must be DISPATCHED, current: {escrow.status.value}")
+
+    escrow_row = await svc._uow._session.execute(
+        sql_select(EscrowContractModel).where(EscrowContractModel.id == escrow_id)
+    )
+    escrow_model = escrow_row.scalar_one_or_none()
+    if not escrow_model or str(escrow_model.buyer_enterprise_id) != str(current_user.enterprise_id):
+        raise HTTPException(status_code=403, detail="Only the buyer can confirm delivery")
+
+    app_id = escrow.algo_app_id.value if hasattr(escrow.algo_app_id, "value") else escrow.algo_app_id
+    if not app_id:
+        raise HTTPException(status_code=400, detail="Escrow has no on-chain app_id")
+
+    gateway = AlgorandGateway()
+    if not gateway._creator_sk:
+        raise HTTPException(status_code=503, detail="Platform wallet not configured for auto-release")
+
+    merkle_root = await svc.compute_merkle_root(escrow_id)
+    blockchain_result = await gateway.release_escrow(app_id=app_id, merkle_root=merkle_root)
+    await svc.record_pera_release(escrow_id, blockchain_result["tx_id"])
+
+    log.info("buyer_confirm_delivery_released", escrow_id=str(escrow_id), tx_id=blockchain_result["tx_id"])
+
+    return success_response({
+        "escrow_id": str(escrow_id),
+        "status": "RELEASED",
+        "tx_id": blockchain_result["tx_id"],
+        "message": "Delivery confirmed. Funds released to seller.",
+    })
+
+
 @router.get(
     "/pending",
     response_model=ApiResponse[list[PendingEscrowResponse]],
@@ -963,9 +1249,30 @@ async def submit_signed_deploy(
 
     gateway = AlgorandGateway()
 
-    result = await gateway.submit_signed_deploy(
-        signed_txn_bytes_list=request_body.signed_transactions,
-    )
+    # ESC-01: return 422 with actionable message instead of bare 500
+    try:
+        result = await gateway.submit_signed_deploy(
+            signed_txn_bytes_list=request_body.signed_transactions,
+        )
+    except Exception as exc:
+        err_str = str(exc)
+        if "below min" in err_str or "insufficient" in err_str.lower():
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Your Algorand wallet does not have enough ALGO to deploy the contract. "
+                    "Please top up at https://bank.testnet.algorand.network/ and retry."
+                ),
+            )
+        if "expired" in err_str.lower() or "transaction already" in err_str.lower():
+            raise HTTPException(
+                status_code=422,
+                detail="Transaction expired or already submitted. Please rebuild and retry.",
+            )
+        raise HTTPException(
+            status_code=422,
+            detail=f"Algorand node rejected the deploy transaction: {exc}",
+        )
 
     # Persist escrow entity via service
     try:

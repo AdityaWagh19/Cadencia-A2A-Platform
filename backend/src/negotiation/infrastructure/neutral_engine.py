@@ -110,6 +110,41 @@ class NeutralEngine:
         if session.is_expired():
             return self._create_timeout_offer(session), True
 
+        # NEG-06: ZOPA pre-check at round 0 — detect impossible deals early
+        if (
+            session.round_count.value == 0
+            and rfq_parsed_fields is not None
+            and catalogue_price is not None
+        ):
+            try:
+                _bv = self._compute_valuation(
+                    buyer_profile, True,
+                    rfq_parsed_fields=rfq_parsed_fields,
+                    catalogue_price=catalogue_price,
+                )
+                _sv = self._compute_valuation(
+                    seller_profile, False,
+                    rfq_parsed_fields=rfq_parsed_fields,
+                    catalogue_price=catalogue_price,
+                )
+                if _sv.reservation_price > _bv.reservation_price * Decimal("1.30"):
+                    log.warning(
+                        "no_zopa_detected",
+                        session_id=str(session.id),
+                        buyer_reservation=float(_bv.reservation_price),
+                        seller_reservation=float(_sv.reservation_price),
+                    )
+                    return (
+                        self._create_walk_away_offer(
+                            session,
+                            "WALK_AWAY: No Zone of Possible Agreement — "
+                            "seller minimum exceeds buyer maximum by more than 30%.",
+                        ),
+                        True,
+                    )
+            except Exception as _ze:
+                log.warning("zopa_check_failed", error=str(_ze))
+
         # 1. Determine whose turn
         current_role = self._determine_turn(session)
         current_profile = (
@@ -169,17 +204,28 @@ class NeutralEngine:
             profile=current_profile,
             playbook=current_playbook,
             role=current_role.value,
+            rfq_context=rfq_parsed_fields,
         )
         offer_history = self._serialize_offer_history(session.offers)
-        session_context = {
+        session_context: dict = {
             "session_id": str(session.id),
             "round_count": session.round_count.value,
             "rfq_id": str(session.rfq_id),
             "strategy_suggestion": strategy_rec.strategy.value,
             "suggested_price": float(strategy_rec.suggested_price),
+            "suggested_price_unit": "INR total order value",
             "opponent_belief": belief.to_dict(),
             "concession_modifier": float(adjusted_concession),
         }
+        # NEG-03: inject RFQ context into user message so LLM knows what is being traded
+        if rfq_parsed_fields:
+            session_context["rfq_context"] = {
+                "product": rfq_parsed_fields.get("product") or rfq_parsed_fields.get("commodity"),
+                "quantity": rfq_parsed_fields.get("quantity"),
+                "quantity_unit": rfq_parsed_fields.get("quantity_unit", "units"),
+                "total_budget_inr": rfq_parsed_fields.get("budget_max"),
+                "price_unit": "INR (total order price)",
+            }
 
         # ── RAG MEMORY INJECTION ──
         # Retrieve Top-5 similar past negotiations from pgvector agent_memory
@@ -214,12 +260,27 @@ class NeutralEngine:
         # ── LOGISTICS CONTEXT (from match scoring) ──
         logistics_context = self._get_logistics_context(session)
 
-        raw_output = await self.agent_driver.generate_offer(  # type: ignore[union-attr]
-            system_prompt=system_prompt,
-            session_context=session_context,
-            offer_history=offer_history,
-            logistics_context=logistics_context,
-        )
+        # NEG-07: fall back to stub instead of freezing session on LLM exhaustion
+        from src.negotiation.infrastructure.llm_agent_driver import LLMExhaustedException, StubAgentDriver
+        try:
+            raw_output = await self.agent_driver.generate_offer(  # type: ignore[union-attr]
+                system_prompt=system_prompt,
+                session_context=session_context,
+                offer_history=offer_history,
+                logistics_context=logistics_context,
+            )
+        except LLMExhaustedException:
+            log.warning(
+                "llm_exhausted_falling_back_to_stub",
+                session_id=str(session.id),
+                round=session.round_count.value,
+            )
+            stub = StubAgentDriver()
+            raw_output = await stub.generate_offer(
+                system_prompt="",
+                session_context=session_context,
+                offer_history=offer_history,
+            )
 
         action = raw_output.get("action", "OFFER").upper()
         llm_price = Decimal(str(raw_output.get("price", strategy_rec.suggested_price)))
@@ -635,6 +696,21 @@ class NeutralEngine:
             return None  # Will be populated when match data is passed through
         except Exception:
             return None
+
+    def _create_walk_away_offer(
+        self, session: NegotiationSession, reason: str
+    ) -> Offer:
+        """Create a placeholder offer for walk-away / no-ZOPA termination."""
+        return Offer.create_agent_offer(
+            session_id=session.id,
+            round_number=session.round_count.value + 1,
+            proposer_role=session.next_proposer,
+            price=Decimal("1"),
+            currency="INR",
+            terms={},
+            confidence=0.0,
+            agent_reasoning=reason,
+        )
 
     def _create_timeout_offer(
         self, session: NegotiationSession

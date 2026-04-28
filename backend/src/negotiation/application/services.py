@@ -182,11 +182,23 @@ class NegotiationService:
             session.seller_enterprise_id
         ) or AgentProfile(enterprise_id=session.seller_enterprise_id)
 
-        buyer_playbook = await self.playbook_repo.get_by_vertical("general")  # type: ignore[union-attr]
-        seller_playbook = buyer_playbook
-
-        # Load transactional context for valuation (RFQ + catalogue)
+        # Load transactional context FIRST — needed to pick the right industry playbook
         rfq_parsed_fields, catalogue_price = await self._load_rfq_and_catalogue(session)
+
+        # NEG-05: commodity-specific playbook with "general" fallback
+        vertical = "general"
+        if rfq_parsed_fields:
+            commodity = (
+                rfq_parsed_fields.get("commodity")
+                or rfq_parsed_fields.get("product", "")
+            )
+            if commodity:
+                vertical = str(commodity).lower().replace(" ", "_").split("/")[0].strip()
+
+        buyer_playbook = await self.playbook_repo.get_by_vertical(vertical)  # type: ignore[union-attr]
+        if buyer_playbook is None and vertical != "general":
+            buyer_playbook = await self.playbook_repo.get_by_vertical("general")  # type: ignore[union-attr]
+        seller_playbook = buyer_playbook
 
         try:
             offer, is_terminal = await self.neutral_engine.process_turn(  # type: ignore[union-attr]

@@ -599,6 +599,25 @@ class SettlementService:
 
         return {"escrow_id": escrow.id, "status": escrow.status.value}
 
+    # ── Dispatch (seller marks goods shipped) ──────────────────────────────
+    async def mark_dispatched(self, escrow_id: uuid.UUID) -> "Escrow":
+        """Transition FUNDED → DISPATCHED. Seller has shipped goods."""
+        from src.settlement.domain.escrow import Escrow
+        escrow = await self._escrow_repo.get_by_id(escrow_id)
+        if escrow is None:
+            raise NotFoundError("Escrow", escrow_id)
+
+        dispatch_event = escrow.mark_dispatched()
+
+        async with self._uow:
+            await self._escrow_repo.update(escrow)
+            await self._uow.commit()
+
+        await self._publisher.publish(dispatch_event)
+        ESCROW_STATE_TOTAL.labels(state="DISPATCHED").inc()
+        log.info("escrow_dispatched", escrow_id=str(escrow_id))
+        return escrow
+
     # ── Queries ────────────────────────────────────────────────────────────────
 
     async def list_escrows(
