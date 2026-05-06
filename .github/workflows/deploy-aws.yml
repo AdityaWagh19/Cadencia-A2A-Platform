@@ -91,6 +91,11 @@ jobs:
           echo "${{ secrets.EC2_SSH_KEY }}" > cadencia-deploy.pem
           chmod 400 cadencia-deploy.pem
 
+      - name: Ensure app directory exists on EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no -i cadencia-deploy.pem \
+            ec2-user@${{ secrets.EC2_HOST }} "mkdir -p /home/ec2-user/app"
+
       - name: Write .env.production to EC2
         run: |
           echo "${{ secrets.BACKEND_ENV }}" > .env.production
