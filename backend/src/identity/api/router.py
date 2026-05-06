@@ -57,6 +57,7 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/v1", tags=["identity"])
 
 _IS_PRODUCTION = os.environ.get("APP_ENV") == "production"
+_SECURE_COOKIES = os.environ.get("SECURE_COOKIES", "true" if _IS_PRODUCTION else "false").lower() == "true"
 _REFRESH_COOKIE_NAME = "refresh_token"
 
 
@@ -71,7 +72,7 @@ def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
         key=_REFRESH_COOKIE_NAME,
         value=refresh_token,
         httponly=True,
-        secure=_IS_PRODUCTION,
+        secure=_SECURE_COOKIES,
         samesite="lax",
         max_age=max_age,
         path="/v1/auth/refresh",
@@ -206,7 +207,7 @@ async def logout(response: Response) -> ApiResponse[dict]:
     response.delete_cookie(
         key=_REFRESH_COOKIE_NAME,
         httponly=True,
-        secure=_IS_PRODUCTION,
+        secure=_SECURE_COOKIES,
         samesite="lax",
         path="/v1/auth/refresh",
     )
