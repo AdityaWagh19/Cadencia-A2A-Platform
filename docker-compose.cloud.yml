@@ -59,7 +59,7 @@ services:
       target: migration
     environment:
       # Use DATABASE_DIRECT_URL (port 5432) for migrations — NOT the pooler
-      DATABASE_URL: ${DATABASE_DIRECT_URL:-postgresql+asyncpg://postgres:Cadencia1234@db.skjnprzknzcrbkivqfpa.supabase.co:5432/postgres?ssl=require}
+      DATABASE_URL: ${DATABASE_DIRECT_URL:-postgresql+asyncpg://postgres.skjnprzknzcrbkivqfpa:Cadencia1234@aws-0-ap-south-1.pooler.supabase.com:5432/postgres?ssl=require}
       PGSSLROOTCERT: /app/supabase-root-ca.pem
     env_file:
       - ./backend/.env
