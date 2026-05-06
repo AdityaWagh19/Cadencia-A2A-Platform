@@ -47,10 +47,10 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    """Read DATABASE_URL from environment — prefer direct connection for migrations.
+    """Read DATABASE_URL from environment.
 
-    Supabase: use DATABASE_DIRECT_URL (port 5432) to bypass PgBouncer.
-    Local dev: DATABASE_URL works fine.
+    Uses DATABASE_DIRECT_URL if set, otherwise falls back to DATABASE_URL.
+    Both work with PgBouncer when no_server_side_binds is enabled.
     """
     url = os.environ.get("DATABASE_DIRECT_URL") or os.environ.get("DATABASE_URL", "")
     if not url:
@@ -95,9 +95,17 @@ async def run_migrations_online() -> None:
     """
     Run migrations in 'online' mode (execute against a live DB connection).
     Used by scripts/migrate.py at container startup.
+
+    Supabase PgBouncer (transaction mode, port 6543) does not support prepared
+    statements by default. Setting no_server_side_binds via server_settings
+    disables them, making migrations compatible with the pooler URL directly.
     """
     url = get_url()
-    connectable = create_async_engine(url, echo=False)
+    connectable = create_async_engine(
+        url,
+        echo=False,
+        connect_args={"server_settings": {"no_server_side_binds": "1"}},
+    )
 
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
