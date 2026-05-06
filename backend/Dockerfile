@@ -14,10 +14,6 @@ RUN groupadd --gid 1001 cadencia \
 WORKDIR /app
 
 # Runtime OS deps + CA certificates
-# Supabase PgBouncer uses a private PKI (Supabase Root 2021 CA) that is NOT in any
-# public trust store. We install it into the system CA directory so that Python's
-# ssl.create_default_context() (used by asyncpg ssl=True) naturally trusts it.
-COPY supabase-root-ca.pem /usr/local/share/ca-certificates/supabase-root-ca.crt
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libpq-dev \
@@ -58,8 +54,6 @@ COPY --chown=cadencia:cadencia pyproject.toml ./
 COPY --chown=cadencia:cadencia artifacts/ ./artifacts/
 # Seed scripts for demo data
 COPY --chown=cadencia:cadencia scripts/ ./scripts/
-# Supabase private root CA — required for asyncpg ssl verify (pooler uses non-public PKI)
-COPY --chown=cadencia:cadencia supabase-root-ca.pem ./
 
 # Drop to non-root
 USER cadencia
