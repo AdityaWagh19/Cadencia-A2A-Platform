@@ -21,18 +21,16 @@ services:
       retries: 5
 
   migration:
-    image: ${BACKEND_IMAGE}
+    image: ${BACKEND_IMAGE:-315326805553.dkr.ecr.ap-south-1.amazonaws.com/cadencia-backend:latest}
     command: alembic upgrade head
     env_file: .env.production
-    environment:
-      - DATABASE_URL=${DATABASE_DIRECT_URL}
     depends_on:
       redis:
         condition: service_healthy
     restart: "no"
 
   backend:
-    image: ${BACKEND_IMAGE}
+    image: ${BACKEND_IMAGE:-315326805553.dkr.ecr.ap-south-1.amazonaws.com/cadencia-backend:latest}
     restart: unless-stopped
     ports:
       - "8000:8000"
@@ -50,7 +48,7 @@ services:
       start_period: 40s
 
   frontend:
-    image: ${FRONTEND_IMAGE}
+    image: ${FRONTEND_IMAGE:-315326805553.dkr.ecr.ap-south-1.amazonaws.com/cadencia-frontend:latest}
     restart: unless-stopped
     ports:
       - "3000:3000"
