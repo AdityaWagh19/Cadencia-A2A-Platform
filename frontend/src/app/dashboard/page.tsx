@@ -116,7 +116,20 @@ export default function DashboardPage() {
               {formatDate(new Date().toISOString())}
             </p>
           </div>
-          <HealthBadge status={healthOverall} size="md" />
+          <div className="flex items-center gap-3">
+            {isBuyer && (
+              <a
+                href="https://credencia-platform.vercel.app/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground shadow-sm hover:bg-primary/90 transition-colors"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Buy Credits
+              </a>
+            )}
+            <HealthBadge status={healthOverall} size="md" />
+          </div>
         </div>
 
         {/* Section 2: Stat Cards */}
