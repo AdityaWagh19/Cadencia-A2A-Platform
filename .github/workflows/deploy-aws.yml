@@ -91,10 +91,14 @@ jobs:
           echo "${{ secrets.EC2_SSH_KEY }}" > cadencia-deploy.pem
           chmod 400 cadencia-deploy.pem
 
-      - name: Ensure app directory exists on EC2
+      - name: Ensure Docker + Compose installed on EC2
         run: |
           ssh -o StrictHostKeyChecking=no -i cadencia-deploy.pem \
-            ec2-user@${{ secrets.EC2_HOST }} "mkdir -p /home/ec2-user/app"
+            ec2-user@${{ secrets.EC2_HOST }} \
+            "command -v docker &>/dev/null || (sudo yum install -y docker && sudo systemctl start docker && sudo systemctl enable docker && sudo usermod -aG docker ec2-user); \
+             command -v docker-compose &>/dev/null || (sudo mkdir -p /usr/local/lib/docker/cli-plugins && sudo curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose && sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose && sudo ln -sf /usr/local/lib/docker/cli-plugins/docker-compose /usr/local/bin/docker-compose); \
+             sudo chmod 666 /var/run/docker.sock; \
+             mkdir -p /home/ec2-user/app"
 
       - name: Write .env.production to EC2
         run: |
