@@ -216,12 +216,21 @@ async def logout(
         # Blacklist for 31 days (longer than max refresh token lifetime)
         await redis.setex(f"rt:blacklist:{token_hash}", 60 * 60 * 24 * 31, "1")
 
+    # Delete cookie at current path
     response.delete_cookie(
         key=_REFRESH_COOKIE_NAME,
         httponly=True,
         secure=_SECURE_COOKIES,
         samesite="lax",
         path="/v1/auth/",
+    )
+    # Also clear old cookie path from previous deployments
+    response.delete_cookie(
+        key=_REFRESH_COOKIE_NAME,
+        httponly=True,
+        secure=_SECURE_COOKIES,
+        samesite="lax",
+        path="/v1/auth/refresh",
     )
     return success_response({"message": "Logged out"})
 

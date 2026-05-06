@@ -1,12 +1,20 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
+import dynamic from 'next/dynamic';
 import './globals.css';
 import { AuthProvider } from '@/context/AuthContext';
-import { AlgorandWalletProvider } from '@/components/providers/AlgorandWalletProvider';
 import { CadenciaWalletProvider } from '@/context/WalletContext';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { MSWProvider } from '@/components/providers/MSWProvider';
 import { Toaster } from '@/components/ui/sonner';
+
+// WalletConnect v2 captures crypto.subtle at module init time.
+// Loading it server-side (SSR) captures undefined → importKey fails in browser.
+// ssr: false ensures it only ever loads in the browser.
+const AlgorandWalletProvider = dynamic(
+  () => import('@/components/providers/AlgorandWalletProvider').then(m => ({ default: m.AlgorandWalletProvider })),
+  { ssr: false, loading: () => null }
+);
 
 const inter = Inter({ subsets: ['latin'] });
 
