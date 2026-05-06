@@ -75,7 +75,7 @@ def _set_refresh_cookie(response: Response, refresh_token: str) -> None:
         secure=_SECURE_COOKIES,
         samesite="lax",
         max_age=max_age,
-        path="/v1/auth/refresh",
+        path="/v1/auth/",
     )
 
 
@@ -197,19 +197,31 @@ async def admin_login(
 @router.post(
     "/auth/logout",
     response_model=ApiResponse[dict],
-    summary="Logout — clears refresh token cookie",
+    summary="Logout — clears refresh token cookie and blacklists token",
 )
-async def logout(response: Response) -> ApiResponse[dict]:
+async def logout(
+    response: Response,
+    refresh_token_cookie: str | None = Cookie(None, alias=_REFRESH_COOKIE_NAME),
+) -> ApiResponse[dict]:
     """
-    Clear the httpOnly refresh token cookie so the browser can no longer
-    silently refresh the session. Must match the path used when setting.
+    Blacklist the refresh token in Redis so it cannot be reused, then
+    clear the httpOnly cookie. Cookie path is /v1/auth/ so it is sent
+    to both /v1/auth/logout and /v1/auth/refresh.
     """
+    if refresh_token_cookie:
+        import hashlib
+        from src.shared.infrastructure.cache.redis_client import get_redis_client
+        token_hash = hashlib.sha256(refresh_token_cookie.encode()).hexdigest()
+        redis = get_redis_client()
+        # Blacklist for 31 days (longer than max refresh token lifetime)
+        await redis.setex(f"rt:blacklist:{token_hash}", 60 * 60 * 24 * 31, "1")
+
     response.delete_cookie(
         key=_REFRESH_COOKIE_NAME,
         httponly=True,
         secure=_SECURE_COOKIES,
         samesite="lax",
-        path="/v1/auth/refresh",
+        path="/v1/auth/",
     )
     return success_response({"message": "Logged out"})
 
@@ -229,6 +241,13 @@ async def refresh_token(
 
     if not refresh_token_cookie:
         raise HTTPException(status_code=401, detail="No refresh token")
+
+    import hashlib
+    from src.shared.infrastructure.cache.redis_client import get_redis_client
+    token_hash = hashlib.sha256(refresh_token_cookie.encode()).hexdigest()
+    redis = get_redis_client()
+    if await redis.exists(f"rt:blacklist:{token_hash}"):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
 
     result = await svc.refresh_token(RefreshTokenCommand(refresh_token=refresh_token_cookie))
 

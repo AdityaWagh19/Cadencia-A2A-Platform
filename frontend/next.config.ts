@@ -16,6 +16,13 @@ const BACKEND_INTERNAL_URL =
 const nextConfig: NextConfig = {
   output: 'standalone',
 
+  // WalletConnect v2 uses Node.js modules that must not be bundled for the browser.
+  // Without this, `window.crypto.subtle` is shadowed by Node's crypto stub → importKey fails.
+  webpack: (config) => {
+    config.externals.push('pino-pretty', 'lokijs', 'encoding');
+    return config;
+  },
+
   // Proxy all /v1/* API requests through Next.js to avoid CORS.
   // Browser → localhost:3000/v1/... → (Next.js rewrites) → backend:8000/v1/...
   async rewrites() {
