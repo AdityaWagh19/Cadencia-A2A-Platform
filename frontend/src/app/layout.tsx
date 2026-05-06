@@ -1,20 +1,12 @@
 import type { Metadata } from 'next';
 import { Inter } from 'next/font/google';
-import dynamic from 'next/dynamic';
 import './globals.css';
 import { AuthProvider } from '@/context/AuthContext';
+import { WalletProviderWrapper } from '@/components/providers/WalletProviderWrapper';
 import { CadenciaWalletProvider } from '@/context/WalletContext';
 import { QueryProvider } from '@/components/providers/QueryProvider';
 import { MSWProvider } from '@/components/providers/MSWProvider';
 import { Toaster } from '@/components/ui/sonner';
-
-// WalletConnect v2 captures crypto.subtle at module init time.
-// Loading it server-side (SSR) captures undefined → importKey fails in browser.
-// ssr: false ensures it only ever loads in the browser.
-const AlgorandWalletProvider = dynamic(
-  () => import('@/components/providers/AlgorandWalletProvider').then(m => ({ default: m.AlgorandWalletProvider })),
-  { ssr: false, loading: () => null }
-);
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -35,12 +27,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <MSWProvider>
           <QueryProvider>
             <AuthProvider>
-              <AlgorandWalletProvider>
+              <WalletProviderWrapper>
                 <CadenciaWalletProvider>
                   {children}
                   <Toaster position="bottom-right" theme="dark" />
                 </CadenciaWalletProvider>
-              </AlgorandWalletProvider>
+              </WalletProviderWrapper>
             </AuthProvider>
           </QueryProvider>
         </MSWProvider>
